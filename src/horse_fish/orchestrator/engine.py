@@ -10,7 +10,7 @@ from horse_fish.agents.pool import AgentPool
 from horse_fish.dispatch.selector import AgentSelector
 from horse_fish.memory.store import MemoryStore
 from horse_fish.merge.queue import MergeQueue
-from horse_fish.models import AgentState, Run, RunState, SubtaskState
+from horse_fish.models import AgentState, Run, RunState, SubtaskResult, SubtaskState
 from horse_fish.observability.traces import Tracer
 from horse_fish.planner.decompose import Planner
 from horse_fish.validation.gates import ValidationGates
@@ -42,6 +42,7 @@ class Orchestrator:
         tracer: Tracer | None = None,
         memory: MemoryStore | None = None,
         stall_timeout_seconds: int = STALL_TIMEOUT_SECONDS,
+        concurrency_limits: dict[RunState, int] | None = None,
     ) -> None:
         self._pool = pool
         self._planner = planner
@@ -54,6 +55,7 @@ class Orchestrator:
         self._tracer = tracer
         self._memory = memory
         self._stall_timeout = stall_timeout_seconds
+        self._concurrency_limits = concurrency_limits or {}
 
         self._handlers: dict[RunState, _Handler] = {
             RunState.planning: self._plan,
@@ -100,6 +102,18 @@ class Orchestrator:
             await self._memory.store_run_result(run, subtask_results)
         except Exception as exc:
             logger.warning("Failed to store run in memory: %s", exc)
+
+    def _stamp_provenance(self, result: SubtaskResult, run: Run, agent_id: str) -> None:
+        """Stamp provenance metadata on a SubtaskResult."""
+        try:
+            slot = self._pool._get_slot(agent_id)
+            result.agent_id = slot.id
+            result.agent_runtime = slot.runtime
+            result.agent_model = slot.model
+        except Exception:
+            result.agent_id = agent_id
+        result.run_id = run.id
+        result.completed_at = datetime.now(UTC)
 
     async def _check_stalls(self, run: Run, agent_map: dict[str, str]) -> int:
         """Check for stalled agents. Returns count of retried subtasks."""
