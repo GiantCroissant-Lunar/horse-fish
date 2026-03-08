@@ -98,6 +98,18 @@ class Orchestrator:
         except Exception as exc:
             logger.warning("Failed to store run in memory: %s", exc)
 
+    def _stamp_provenance(self, result: SubtaskResult, run: Run, agent_id: str) -> None:
+        """Stamp provenance metadata on a SubtaskResult."""
+        try:
+            slot = self._pool._get_slot(agent_id)
+            result.agent_id = slot.id
+            result.agent_runtime = slot.runtime
+            result.agent_model = slot.model
+        except Exception:
+            result.agent_id = agent_id
+        result.run_id = run.id
+        result.completed_at = datetime.now(UTC)
+
     async def _plan(self, run: Run) -> Run:
         """Decompose the task into subtasks via the Planner."""
         try:
@@ -182,6 +194,7 @@ class Orchestrator:
                     # Agent died — check if it produced output
                     result = await self._pool.collect_result(agent_id)
                     subtask.result = result
+                    self._stamp_provenance(result, run, agent_id)
                     subtask.state = SubtaskState.done if result.success else SubtaskState.failed
                     active_count -= 1
                     continue
@@ -191,6 +204,7 @@ class Orchestrator:
                     result = await self._pool.collect_result(agent_id)
                     if result.diff:
                         subtask.result = result
+                        self._stamp_provenance(result, run, agent_id)
                         subtask.state = SubtaskState.done
                         active_count -= 1
                 except Exception:

@@ -54,6 +54,12 @@ class SubtaskResult(BaseModel):
     output: str
     diff: str
     duration_seconds: float
+    # Provenance fields (Cognee pattern)
+    agent_id: str | None = None
+    agent_runtime: str | None = None
+    agent_model: str | None = None
+    run_id: str | None = None
+    completed_at: datetime | None = None
 
 
 class Subtask(BaseModel):

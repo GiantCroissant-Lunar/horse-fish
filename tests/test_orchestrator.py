@@ -1026,3 +1026,55 @@ async def test_run_does_not_store_memory_on_failure(mock_pool, mock_planner, moc
 
     assert run.state == RunState.failed
     mock_memory.store_run_result.assert_not_called()
+
+
+# --- Task 5: Provenance stamping tests ---
+
+
+@pytest.mark.asyncio
+async def test_execute_stamps_provenance_on_results(mock_pool, mock_planner, mock_gates):
+    """Test _execute stamps provenance metadata on SubtaskResults."""
+    orchestrator = Orchestrator(
+        pool=mock_pool,
+        planner=mock_planner,
+        gates=mock_gates,
+        runtime="claude",
+        model="claude-sonnet-4.6",
+    )
+
+    subtask = Subtask(id="subtask-1", description="Task 1")
+    run = Run.create("Build system")
+    run.subtasks = [subtask]
+    run.state = RunState.executing
+
+    slot = AgentSlot(
+        id="agent-1", name="hf-subtask-1", runtime="claude",
+        model="claude-sonnet-4.6", capability="builder",
+        state=AgentState.busy,
+    )
+    mock_pool.spawn.return_value = slot
+    mock_pool._get_slot.return_value = slot  # For _stamp_provenance
+    mock_pool.send_task = AsyncMock()
+    mock_pool.check_status = AsyncMock(return_value=AgentState.dead)
+    mock_pool.collect_result = AsyncMock(
+        return_value=SubtaskResult(
+            subtask_id="subtask-1", success=True, output="Done",
+            diff="commit", duration_seconds=10.0,
+        )
+    )
+
+    async def mock_sleep(seconds):
+        return None
+
+    with pytest.MonkeyPatch().context() as m:
+        m.setattr("horse_fish.orchestrator.engine.asyncio.sleep", mock_sleep)
+        result = await orchestrator._execute(run)
+
+    # Check provenance was stamped
+    sr = subtask.result
+    assert sr is not None
+    assert sr.agent_id == "agent-1"
+    assert sr.agent_runtime == "claude"
+    assert sr.agent_model == "claude-sonnet-4.6"
+    assert sr.run_id == run.id
+    assert sr.completed_at is not None
