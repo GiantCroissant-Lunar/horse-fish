@@ -1,7 +1,7 @@
 version: '1'
 domains:
   - agents
-  - architecture
+  - planner
 governance:
   max_entries: 100
   warn_entries: 150
