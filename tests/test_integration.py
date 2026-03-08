@@ -168,8 +168,8 @@ async def test_orchestrator_respects_dependency_ordering(
     subtask_a = run.subtasks[0]
     subtask_b = run.subtasks[1]
 
-    # Verify dependency structure
-    assert subtask_b.deps == [subtask_a.description]
+    # Verify dependency structure (deps resolved to IDs by _resolve_deps)
+    assert subtask_b.deps == [subtask_a.id]
 
 
 @pytest.mark.asyncio
