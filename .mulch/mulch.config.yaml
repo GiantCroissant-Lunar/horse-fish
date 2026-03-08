@@ -4,6 +4,7 @@ domains:
   - validation
   - dispatch
   - observability
+  - orchestrator
 governance:
   max_entries: 100
   warn_entries: 150
