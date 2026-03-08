@@ -134,3 +134,119 @@ def test_run_with_options(mock_init_components, runner, mock_run):
     assert result.exit_code == 0
     mock_init_components.assert_called_once_with("pi", "custom-model", 5)
     mock_orchestrator.run.assert_called_once_with("custom task")
+
+
+@patch("horse_fish.cli.MergeQueue")
+@patch("horse_fish.cli.WorktreeManager")
+@patch("horse_fish.cli.Store")
+def test_merge_command_processes_queue(mock_store_class, mock_worktrees_class, mock_merge_queue_class, runner):
+    """Test 'hf merge' processes the merge queue and displays results."""
+    mock_store = MagicMock()
+    mock_store_class.return_value = mock_store
+
+    mock_worktrees = MagicMock()
+    mock_worktrees_class.return_value = mock_worktrees
+
+    mock_merge_queue = MagicMock()
+    mock_merge_queue.process = AsyncMock(
+        return_value=[
+            MagicMock(subtask_id="task-1", branch="horse-fish/agent-1", success=True, conflict_files=[]),
+            MagicMock(subtask_id="task-2", branch="horse-fish/agent-2", success=False, conflict_files=[]),
+        ]
+    )
+    mock_merge_queue_class.return_value = mock_merge_queue
+
+    result = runner.invoke(main, ["merge"])
+
+    assert result.exit_code == 0
+    assert "Merge results:" in result.output
+    assert "✓ merged" in result.output
+    assert "task-1" in result.output
+    assert "✗ conflict" in result.output
+    assert "task-2" in result.output
+    mock_store.migrate.assert_called_once()
+    mock_store.close.assert_called_once()
+    mock_merge_queue.process.assert_called_once()
+
+
+@patch("horse_fish.cli.MergeQueue")
+@patch("horse_fish.cli.WorktreeManager")
+@patch("horse_fish.cli.Store")
+def test_merge_dry_run_shows_pending(mock_store_class, mock_worktrees_class, mock_merge_queue_class, runner):
+    """Test 'hf merge --dry-run' shows pending merges without processing."""
+    mock_store = MagicMock()
+    mock_store_class.return_value = mock_store
+
+    mock_worktrees = MagicMock()
+    mock_worktrees_class.return_value = mock_worktrees
+
+    mock_merge_queue = MagicMock()
+    mock_merge_queue.pending = AsyncMock(
+        return_value=[
+            {"subtask_id": "task-1", "agent_name": "agent-1", "branch": "horse-fish/agent-1", "priority": 0, "created_at": "2026-03-08T10:00:00Z"},
+            {"subtask_id": "task-2", "agent_name": "agent-2", "branch": "horse-fish/agent-2", "priority": 1, "created_at": "2026-03-08T10:01:00Z"},
+        ]
+    )
+    mock_merge_queue_class.return_value = mock_merge_queue
+
+    result = runner.invoke(main, ["merge", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert "Subtask" in result.output
+    assert "Agent" in result.output
+    assert "Branch" in result.output
+    assert "Priority" in result.output
+    assert "task-1" in result.output
+    assert "task-2" in result.output
+    assert "agent-1" in result.output
+    assert "agent-2" in result.output
+    mock_store.migrate.assert_called_once()
+    mock_store.close.assert_called_once()
+    mock_merge_queue.pending.assert_called_once()
+    mock_merge_queue.process.assert_not_called()
+
+
+@patch("horse_fish.cli.MergeQueue")
+@patch("horse_fish.cli.WorktreeManager")
+@patch("horse_fish.cli.Store")
+def test_merge_no_pending_shows_message(mock_store_class, mock_worktrees_class, mock_merge_queue_class, runner):
+    """Test 'hf merge' shows message when no pending merges."""
+    mock_store = MagicMock()
+    mock_store_class.return_value = mock_store
+
+    mock_worktrees = MagicMock()
+    mock_worktrees_class.return_value = mock_worktrees
+
+    mock_merge_queue = MagicMock()
+    mock_merge_queue.process = AsyncMock(return_value=[])
+    mock_merge_queue_class.return_value = mock_merge_queue
+
+    result = runner.invoke(main, ["merge"])
+
+    assert result.exit_code == 0
+    assert "No pending merges to process" in result.output
+    mock_store.migrate.assert_called_once()
+    mock_store.close.assert_called_once()
+
+
+@patch("horse_fish.cli.MergeQueue")
+@patch("horse_fish.cli.WorktreeManager")
+@patch("horse_fish.cli.Store")
+def test_merge_dry_run_no_pending_shows_message(mock_store_class, mock_worktrees_class, mock_merge_queue_class, runner):
+    """Test 'hf merge --dry-run' shows message when no pending merges."""
+    mock_store = MagicMock()
+    mock_store_class.return_value = mock_store
+
+    mock_worktrees = MagicMock()
+    mock_worktrees_class.return_value = mock_worktrees
+
+    mock_merge_queue = MagicMock()
+    mock_merge_queue.pending = AsyncMock(return_value=[])
+    mock_merge_queue_class.return_value = mock_merge_queue
+
+    result = runner.invoke(main, ["merge", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert "No pending merges in queue" in result.output
+    mock_store.migrate.assert_called_once()
+    mock_store.close.assert_called_once()

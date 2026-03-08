@@ -10,6 +10,7 @@ import click
 from horse_fish.agents.pool import AgentPool
 from horse_fish.agents.tmux import TmuxManager
 from horse_fish.agents.worktree import WorktreeManager
+from horse_fish.merge.queue import MergeQueue
 from horse_fish.orchestrator.engine import Orchestrator
 from horse_fish.planner.decompose import Planner
 from horse_fish.store.db import Store
@@ -87,6 +88,45 @@ def clean():
     try:
         released = asyncio.run(pool.cleanup())
         click.echo(f"Released {released} agents.")
+    finally:
+        store.close()
+
+
+@main.command()
+@click.argument("run_id", required=False)
+@click.option("--dry-run", is_flag=True, help="Show pending merges without merging")
+@click.option("--force", is_flag=True, help="Merge even if validation gates fail")
+def merge(run_id: str | None, dry_run: bool, force: bool):
+    """Process merge queue for a run."""
+    repo_root = str(Path.cwd())
+    store = Store(DB_PATH)
+    store.migrate()
+    worktrees = WorktreeManager(repo_root)
+    merge_queue = MergeQueue(worktrees, store)
+
+    try:
+        if dry_run:
+            pending = asyncio.run(merge_queue.pending())
+            if not pending:
+                click.echo("No pending merges in queue.")
+                return
+            click.echo(f"{'Subtask':<20} {'Agent':<20} {'Branch':<30} {'Priority':<10} {'Created'}")
+            click.echo("-" * 100)
+            for entry in pending:
+                click.echo(
+                    f"{entry['subtask_id']:<20} {entry['agent_name']:<20} {entry['branch']:<30} {entry['priority']:<10} {entry['created_at']}"
+                )
+        else:
+            results = asyncio.run(merge_queue.process())
+            if not results:
+                click.echo("No pending merges to process.")
+                return
+            click.echo("Merge results:")
+            for result in results:
+                status = "✓ merged" if result.success else "✗ conflict"
+                click.echo(f"  [{status}] {result.subtask_id} ({result.branch})")
+                if result.conflict_files:
+                    click.echo(f"    Conflicts: {', '.join(result.conflict_files)}")
     finally:
         store.close()
 
