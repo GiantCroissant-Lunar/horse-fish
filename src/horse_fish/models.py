@@ -33,9 +33,9 @@ class RunState(StrEnum):
 
 
 class TaskComplexity(StrEnum):
-    solo = "SOLO"
-    trio = "TRIO"
-    squad = "SQUAD"
+    SOLO = "SOLO"  # 1 subtask max
+    TRIO = "TRIO"  # 3 subtasks max
+    SQUAD = "SQUAD"  # 8 subtasks max
 
 
 class AgentSlot(BaseModel):
