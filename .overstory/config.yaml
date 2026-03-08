@@ -59,8 +59,9 @@ runtime:
   default: claude
   shellInitDelayMs: 0
   pi:
-    provider: anthropic
+    provider: kimi-coding
+    model: kimi-for-coding
     modelMap:
-      opus: anthropic/claude-opus-4-6
-      sonnet: anthropic/claude-sonnet-4-6
-      haiku: anthropic/claude-haiku-4-5
+      opus: kimi-coding/kimi-for-coding
+      sonnet: kimi-coding/kimi-for-coding
+      haiku: kimi-coding/kimi-for-coding
