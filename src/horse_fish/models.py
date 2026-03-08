@@ -70,6 +70,9 @@ class Subtask(BaseModel):
     files_hint: list[str] = Field(default_factory=list)
     state: SubtaskState = SubtaskState.pending
     result: SubtaskResult | None = None
+    retry_count: int = 0
+    max_retries: int = 2
+    last_activity_at: datetime | None = None
 
     @classmethod
     def create(cls, description: str) -> Subtask:
