@@ -63,7 +63,7 @@ MIGRATIONS: list[tuple[int, str]] = [
         """
         CREATE TABLE IF NOT EXISTS lessons (
             id TEXT PRIMARY KEY,
-            run_id TEXT,
+            run_id TEXT REFERENCES runs(id),
             category TEXT NOT NULL,
             pattern TEXT NOT NULL,
             content TEXT NOT NULL,
