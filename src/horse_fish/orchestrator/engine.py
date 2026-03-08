@@ -38,6 +38,7 @@ class Orchestrator:
         max_agents: int = 3,
         selector: AgentSelector | None = None,
         merge_queue: MergeQueue | None = None,
+        tracer: Tracer | None = None,
         memory: MemoryStore | None = None,
     ) -> None:
         self._pool = pool
@@ -48,6 +49,7 @@ class Orchestrator:
         self._max_agents = max_agents
         self._selector = selector
         self._merge_queue = merge_queue
+        self._tracer = tracer
         self._memory = memory
 
         self._handlers: dict[RunState, _Handler] = {
@@ -77,6 +79,9 @@ class Orchestrator:
             logger.info("Run %s transitioned to %s", run.id, run.state)
 
         run.completed_at = datetime.now(UTC)
+
+        if self._tracer and trace:
+            self._tracer.end_trace(trace, run.state.value)
 
         if run.state == RunState.completed:
             await self._learn(run)
