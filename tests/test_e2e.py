@@ -1,8 +1,14 @@
-"""End-to-end integration tests with real tmux."""
+"""End-to-end integration tests with real tmux.
+
+These tests use real tmux + worktree but spawn a bash shell instead of a real
+agent runtime (claude/pi). Ready detection is patched out since bash doesn't
+show a runtime prompt.
+"""
 
 import asyncio
 import subprocess
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -78,7 +84,8 @@ def pool(store: Store, tmux: TmuxManager, worktrees: WorktreeManager) -> AgentPo
 
 
 @pytest.mark.asyncio
-async def test_e2e_single_subtask_creates_file(pool: AgentPool) -> None:
+@patch.object(AgentPool, "_wait_for_ready", new_callable=AsyncMock)
+async def test_e2e_single_subtask_creates_file(_mock_ready, pool: AgentPool) -> None:
     """Test that a single subtask can create a file via tmux."""
     # Spawn an agent with unique name to avoid duplicate session errors
     slot = await pool.spawn(name="hf-e2e-single", runtime="claude", model="test", capability="builder")
@@ -115,7 +122,8 @@ async def test_e2e_single_subtask_creates_file(pool: AgentPool) -> None:
 
 
 @pytest.mark.asyncio
-async def test_e2e_worktree_isolation(pool: AgentPool, tmp_repo: Path) -> None:
+@patch.object(AgentPool, "_wait_for_ready", new_callable=AsyncMock)
+async def test_e2e_worktree_isolation(_mock_ready, pool: AgentPool, tmp_repo: Path) -> None:
     """Test that worktree isolation is properly maintained."""
     # Spawn an agent with unique name
     slot = await pool.spawn(name="hf-e2e-isolation", runtime="claude", model="test", capability="builder")

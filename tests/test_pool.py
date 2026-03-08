@@ -195,6 +195,7 @@ async def test_send_task_wraps_prompt_with_context() -> None:
     store = make_store()
     tmux = MagicMock()
     tmux.spawn = AsyncMock(return_value=9)
+    tmux.capture_pane = AsyncMock(return_value="Ready\n> \n")
     tmux.send_keys = AsyncMock()
     worktrees = MagicMock()
     worktrees.create = AsyncMock(return_value=make_worktree_info())
