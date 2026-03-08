@@ -10,6 +10,7 @@ from horse_fish.models import (
     Subtask,
     SubtaskResult,
     SubtaskState,
+    TaskComplexity,
 )
 
 
@@ -40,6 +41,21 @@ class TestRunState:
         assert RunState.merging == "merging"
         assert RunState.completed == "completed"
         assert RunState.failed == "failed"
+
+
+class TestTaskComplexity:
+    def test_values(self):
+        assert TaskComplexity.solo == "SOLO"
+        assert TaskComplexity.trio == "TRIO"
+        assert TaskComplexity.squad == "SQUAD"
+
+    def test_is_strenum(self):
+        assert isinstance(TaskComplexity.solo, str)
+
+    def test_serialization(self):
+        assert TaskComplexity.solo.value == "SOLO"
+        assert TaskComplexity.trio.value == "TRIO"
+        assert TaskComplexity.squad.value == "SQUAD"
 
 
 class TestAgentSlot:
@@ -131,8 +147,11 @@ class TestSubtaskResult:
     def test_provenance_defaults(self):
         """Test SubtaskResult provenance fields default to None."""
         result = SubtaskResult(
-            subtask_id="s1", success=True, output="Done",
-            diff="", duration_seconds=5.0,
+            subtask_id="s1",
+            success=True,
+            output="Done",
+            diff="",
+            duration_seconds=5.0,
         )
         assert result.agent_id is None
         assert result.agent_runtime is None
@@ -191,6 +210,7 @@ class TestSubtask:
     def test_retry_fields_explicit(self):
         """Test Subtask accepts explicit retry field values."""
         from datetime import UTC, datetime
+
         now = datetime.now(UTC)
         st = Subtask(
             id="st-1",
@@ -251,3 +271,34 @@ class TestRun:
         run.completed_at = now
         run.state = RunState.completed
         assert run.completed_at == now
+
+    def test_complexity_field_default(self):
+        run = Run.create("test task")
+        assert run.complexity is None
+
+    def test_complexity_field_explicit(self):
+        run = Run.create("complex task")
+        run.complexity = TaskComplexity.squad
+        assert run.complexity == TaskComplexity.squad
+
+    def test_lessons_field_default(self):
+        run = Run.create("learning task")
+        assert run.lessons == []
+
+    def test_lessons_field_append(self):
+        run = Run.create("learning task")
+        run.lessons.append("Lesson 1")
+        run.lessons.append("Lesson 2")
+        assert len(run.lessons) == 2
+        assert run.lessons == ["Lesson 1", "Lesson 2"]
+
+    def test_serialization_with_new_fields(self):
+        run = Run.create("serialize test")
+        run.complexity = TaskComplexity.trio
+        run.lessons.append("Learned something")
+        data = run.model_dump()
+        assert data["complexity"] == "TRIO"
+        assert data["lessons"] == ["Learned something"]
+        restored = Run.model_validate(data)
+        assert restored.complexity == TaskComplexity.trio
+        assert restored.lessons == ["Learned something"]
