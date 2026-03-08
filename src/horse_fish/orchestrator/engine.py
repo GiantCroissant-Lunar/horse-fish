@@ -10,6 +10,7 @@ from horse_fish.agents.pool import AgentPool
 from horse_fish.dispatch.selector import AgentSelector
 from horse_fish.merge.queue import MergeQueue
 from horse_fish.models import AgentState, Run, RunState, SubtaskState
+from horse_fish.observability.traces import Tracer
 from horse_fish.planner.decompose import Planner
 from horse_fish.validation.gates import ValidationGates
 
@@ -36,6 +37,7 @@ class Orchestrator:
         max_agents: int = 3,
         selector: AgentSelector | None = None,
         merge_queue: MergeQueue | None = None,
+        tracer: Tracer | None = None,
     ) -> None:
         self._pool = pool
         self._planner = planner
@@ -45,6 +47,7 @@ class Orchestrator:
         self._max_agents = max_agents
         self._selector = selector
         self._merge_queue = merge_queue
+        self._tracer = tracer
 
         self._handlers: dict[RunState, _Handler] = {
             RunState.planning: self._plan,
@@ -58,14 +61,25 @@ class Orchestrator:
         run = Run.create(task)
         logger.info("Starting run %s for task: %s", run.id, task)
 
+        trace = self._tracer.trace_run(run.id, task) if self._tracer else None
+
         while run.state not in (RunState.completed, RunState.failed):
             handler = self._handlers.get(run.state)
             if handler is None:
                 raise OrchestratorError(f"No handler for state {run.state}")
+
+            span = self._tracer.span(trace, run.state.value) if self._tracer and trace else None
             run = await handler(run)
+            if self._tracer and span:
+                self._tracer.end_span(span, {"state": run.state.value})
+
             logger.info("Run %s transitioned to %s", run.id, run.state)
 
         run.completed_at = datetime.now(UTC)
+
+        if self._tracer and trace:
+            self._tracer.end_trace(trace, run.state.value)
+
         return run
 
     async def _plan(self, run: Run) -> Run:
