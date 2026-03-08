@@ -9,10 +9,7 @@ Skipped if any prerequisite is missing.
 
 from __future__ import annotations
 
-import asyncio
-import os
 import subprocess
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -95,9 +92,11 @@ def components(tmp_repo, store):
 
     # Mock planner to return a single trivial subtask
     mock_planner = MagicMock(spec=Planner)
-    mock_planner.decompose = AsyncMock(return_value=[
-        Subtask.create("Create a file called greeting.py with: print('hello from horse-fish')"),
-    ])
+    mock_planner.decompose = AsyncMock(
+        return_value=[
+            Subtask.create("Create a file called greeting.py with: print('hello from horse-fish')"),
+        ]
+    )
 
     orchestrator = Orchestrator(
         pool=pool,
@@ -120,9 +119,7 @@ async def test_smoke_full_loop(tmp_repo, components):
 
     # The run should complete (or fail at validation — that's OK for smoke test)
     # What matters is that we got through spawn → ready → prompt → execute
-    assert run.state.value in ("completed", "failed", "reviewing", "merging"), (
-        f"Unexpected terminal state: {run.state}"
-    )
+    assert run.state.value in ("completed", "failed", "reviewing", "merging"), f"Unexpected terminal state: {run.state}"
 
     # Verify at least one subtask was dispatched and attempted
     assert len(run.subtasks) == 1

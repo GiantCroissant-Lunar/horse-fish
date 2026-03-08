@@ -23,6 +23,7 @@ def lesson_store(store):
 
 # --- Lesson model ---
 
+
 def test_lesson_creation():
     lesson = Lesson(
         id="l1",
@@ -38,20 +39,34 @@ def test_lesson_creation():
 
 # --- Over-decomposition detection ---
 
+
 def test_extract_over_decomposition(lesson_store):
     """Detects when subtask count >> files touched."""
     run = Run.create("Add version string to __init__.py")
     run.state = RunState.completed
     run.subtasks = [
-        Subtask(id="s1", description="Add version", state=SubtaskState.done,
-                result=SubtaskResult(subtask_id="s1", success=True, output="ok",
-                                     diff="diff --git a/src/__init__.py", duration_seconds=10)),
-        Subtask(id="s2", description="Write test for version", state=SubtaskState.done,
-                result=SubtaskResult(subtask_id="s2", success=True, output="ok",
-                                     diff="diff --git a/src/__init__.py", duration_seconds=5)),
-        Subtask(id="s3", description="Commit changes", state=SubtaskState.done,
-                result=SubtaskResult(subtask_id="s3", success=True, output="ok",
-                                     diff="", duration_seconds=2)),
+        Subtask(
+            id="s1",
+            description="Add version",
+            state=SubtaskState.done,
+            result=SubtaskResult(
+                subtask_id="s1", success=True, output="ok", diff="diff --git a/src/__init__.py", duration_seconds=10
+            ),
+        ),
+        Subtask(
+            id="s2",
+            description="Write test for version",
+            state=SubtaskState.done,
+            result=SubtaskResult(
+                subtask_id="s2", success=True, output="ok", diff="diff --git a/src/__init__.py", duration_seconds=5
+            ),
+        ),
+        Subtask(
+            id="s3",
+            description="Commit changes",
+            state=SubtaskState.done,
+            result=SubtaskResult(subtask_id="s3", success=True, output="ok", diff="", duration_seconds=2),
+        ),
     ]
 
     lessons = lesson_store.extract_lessons(run)
@@ -67,9 +82,14 @@ def test_no_over_decomposition_for_single_subtask(lesson_store):
     run = Run.create("Simple task")
     run.state = RunState.completed
     run.subtasks = [
-        Subtask(id="s1", description="Do it", state=SubtaskState.done,
-                result=SubtaskResult(subtask_id="s1", success=True, output="ok",
-                                     diff="diff --git a/src/foo.py", duration_seconds=10)),
+        Subtask(
+            id="s1",
+            description="Do it",
+            state=SubtaskState.done,
+            result=SubtaskResult(
+                subtask_id="s1", success=True, output="ok", diff="diff --git a/src/foo.py", duration_seconds=10
+            ),
+        ),
     ]
 
     lessons = lesson_store.extract_lessons(run)
@@ -79,16 +99,21 @@ def test_no_over_decomposition_for_single_subtask(lesson_store):
 
 # --- Stall detection ---
 
+
 def test_extract_stall_lesson(lesson_store):
     """Detects subtasks that were retried due to stalls."""
     run = Run.create("Some task")
     run.state = RunState.completed
     run.subtasks = [
-        Subtask(id="s1", description="Build feature", state=SubtaskState.done,
-                retry_count=2,
-                result=SubtaskResult(subtask_id="s1", success=True, output="ok",
-                                     diff="some diff", duration_seconds=120,
-                                     agent_runtime="pi")),
+        Subtask(
+            id="s1",
+            description="Build feature",
+            state=SubtaskState.done,
+            retry_count=2,
+            result=SubtaskResult(
+                subtask_id="s1", success=True, output="ok", diff="some diff", duration_seconds=120, agent_runtime="pi"
+            ),
+        ),
     ]
 
     lessons = lesson_store.extract_lessons(run)
@@ -99,15 +124,20 @@ def test_extract_stall_lesson(lesson_store):
 
 # --- No-diff detection ---
 
+
 def test_extract_no_diff_lesson(lesson_store):
     """Detects when agent reports success but produces no diff."""
     run = Run.create("Some task")
     run.state = RunState.completed
     run.subtasks = [
-        Subtask(id="s1", description="Build feature", state=SubtaskState.done,
-                result=SubtaskResult(subtask_id="s1", success=True, output="looks good",
-                                     diff="", duration_seconds=30,
-                                     agent_runtime="pi")),
+        Subtask(
+            id="s1",
+            description="Build feature",
+            state=SubtaskState.done,
+            result=SubtaskResult(
+                subtask_id="s1", success=True, output="looks good", diff="", duration_seconds=30, agent_runtime="pi"
+            ),
+        ),
     ]
 
     lessons = lesson_store.extract_lessons(run)
@@ -117,11 +147,20 @@ def test_extract_no_diff_lesson(lesson_store):
 
 # --- Store and retrieve ---
 
+
 def test_store_lesson(lesson_store, store):
     """Lessons should be persisted to SQLite."""
+    store.execute(
+        "INSERT INTO runs (id, task, state, created_at) VALUES (?, ?, ?, ?)",
+        ("r1", "test", "completed", "2026-03-08T00:00:00"),
+    )
     lesson = Lesson(
-        id="l1", run_id="r1", category="planner", pattern="over_decomposed",
-        content="Over-decomposed", task_signature="add version",
+        id="l1",
+        run_id="r1",
+        category="planner",
+        pattern="over_decomposed",
+        content="Over-decomposed",
+        task_signature="add version",
     )
     lesson_store.store_lesson(lesson)
 
@@ -130,16 +169,36 @@ def test_store_lesson(lesson_store, store):
     assert row["pattern"] == "over_decomposed"
 
 
-def test_get_lessons_for_task(lesson_store):
+def test_get_lessons_for_task(lesson_store, store):
     """Should retrieve lessons relevant to a task."""
-    lesson_store.store_lesson(Lesson(
-        id="l1", run_id="r1", category="planner", pattern="over_decomposed",
-        content="Task 'add version' was over-decomposed", task_signature="add version",
-    ))
-    lesson_store.store_lesson(Lesson(
-        id="l2", run_id="r2", category="dispatch", pattern="agent_stalled",
-        content="Pi stalled on test task", task_signature="write tests",
-    ))
+    store.execute(
+        "INSERT INTO runs (id, task, state, created_at) VALUES (?, ?, ?, ?)",
+        ("r1", "test1", "completed", "2026-03-08T00:00:00"),
+    )
+    store.execute(
+        "INSERT INTO runs (id, task, state, created_at) VALUES (?, ?, ?, ?)",
+        ("r2", "test2", "completed", "2026-03-08T00:00:00"),
+    )
+    lesson_store.store_lesson(
+        Lesson(
+            id="l1",
+            run_id="r1",
+            category="planner",
+            pattern="over_decomposed",
+            content="Task 'add version' was over-decomposed",
+            task_signature="add version",
+        )
+    )
+    lesson_store.store_lesson(
+        Lesson(
+            id="l2",
+            run_id="r2",
+            category="dispatch",
+            pattern="agent_stalled",
+            content="Pi stalled on test task",
+            task_signature="write tests",
+        )
+    )
 
     # Query for planner lessons
     lessons = lesson_store.get_lessons_for_task("add version string", category="planner")

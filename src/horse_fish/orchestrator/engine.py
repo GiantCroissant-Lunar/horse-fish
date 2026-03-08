@@ -8,11 +8,13 @@ from datetime import UTC, datetime
 
 from horse_fish.agents.pool import AgentPool
 from horse_fish.dispatch.selector import AgentSelector
+from horse_fish.memory.lessons import LessonStore
 from horse_fish.memory.store import MemoryStore
 from horse_fish.merge.queue import MergeQueue
 from horse_fish.models import AgentState, Run, RunState, Subtask, SubtaskResult, SubtaskState
 from horse_fish.observability.traces import Tracer
 from horse_fish.planner.decompose import Planner
+from horse_fish.planner.smart import SmartPlanner
 from horse_fish.validation.gates import ValidationGates
 
 logger = logging.getLogger(__name__)
@@ -41,6 +43,7 @@ class Orchestrator:
         merge_queue: MergeQueue | None = None,
         tracer: Tracer | None = None,
         memory: MemoryStore | None = None,
+        lesson_store: LessonStore | None = None,
         stall_timeout_seconds: int = STALL_TIMEOUT_SECONDS,
         concurrency_limits: dict[RunState, int] | None = None,
     ) -> None:
@@ -54,6 +57,8 @@ class Orchestrator:
         self._merge_queue = merge_queue
         self._tracer = tracer
         self._memory = memory
+        self._lesson_store = lesson_store
+        self._smart_planner = SmartPlanner(planner, lesson_store=lesson_store) if lesson_store else None
         self._stall_timeout = stall_timeout_seconds
         self._concurrency_limits = concurrency_limits or {}
 
@@ -95,13 +100,21 @@ class Orchestrator:
 
     async def _learn(self, run: Run) -> None:
         """Store completed run results in memory for future learning."""
-        if not self._memory:
-            return
-        subtask_results = [s.result for s in run.subtasks if s.result]
-        try:
-            await self._memory.store_run_result(run, subtask_results)
-        except Exception as exc:
-            logger.warning("Failed to store run in memory: %s", exc)
+        if self._memory:
+            subtask_results = [s.result for s in run.subtasks if s.result]
+            try:
+                await self._memory.store_run_result(run, subtask_results)
+            except Exception as exc:
+                logger.warning("Failed to store run in memory: %s", exc)
+
+        if self._lesson_store:
+            try:
+                lessons = self._lesson_store.extract_lessons(run)
+                for lesson in lessons:
+                    self._lesson_store.store_lesson(lesson)
+                run.lessons = [lesson.id for lesson in lessons]
+            except Exception as exc:
+                logger.warning("Failed to extract lessons: %s", exc)
 
     def _stamp_provenance(self, result: SubtaskResult, run: Run, agent_id: str) -> None:
         """Stamp provenance metadata on a SubtaskResult."""
@@ -157,7 +170,11 @@ class Orchestrator:
     async def _plan(self, run: Run) -> Run:
         """Decompose the task into subtasks via the Planner."""
         try:
-            subtasks = await self._planner.decompose(run.task)
+            if self._smart_planner:
+                subtasks, complexity = await self._smart_planner.decompose(run.task)
+                run.complexity = complexity
+            else:
+                subtasks = await self._planner.decompose(run.task)
         except Exception as exc:
             logger.error("Planning failed: %s", exc)
             run.state = RunState.failed

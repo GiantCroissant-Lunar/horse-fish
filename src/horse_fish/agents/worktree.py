@@ -291,9 +291,7 @@ class WorktreeManager:
 
             # If no uncommitted changes, check for commits ahead of base branch
             branch = f"horse-fish/{name}"
-            _, committed, _ = await self._run_git(
-                "diff", f"{base_branch}...{branch}", cwd=path, check=False
-            )
+            _, committed, _ = await self._run_git("diff", f"{base_branch}...{branch}", cwd=path, check=False)
             return committed
         except WorktreeError:
             return ""

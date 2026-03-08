@@ -10,6 +10,7 @@ import click
 from horse_fish.agents.pool import AgentPool
 from horse_fish.agents.tmux import TmuxManager
 from horse_fish.agents.worktree import WorktreeManager
+from horse_fish.memory.lessons import LessonStore
 from horse_fish.memory.store import MemoryStore
 from horse_fish.merge.queue import MergeQueue
 from horse_fish.orchestrator.engine import Orchestrator
@@ -23,6 +24,7 @@ DB_PATH = ".horse-fish/state.db"
 def _init_components(runtime: str, model: str | None, max_agents: int):
     """Initialize all components needed for orchestration."""
     repo_root = str(Path.cwd())
+    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     store = Store(DB_PATH)
     store.migrate()
     tmux = TmuxManager()
@@ -33,6 +35,7 @@ def _init_components(runtime: str, model: str | None, max_agents: int):
     planner = Planner(runtime=runtime, model=model)
     gates = ValidationGates()
     memory = MemoryStore()
+    lesson_store = LessonStore(store)
     orchestrator = Orchestrator(
         pool=pool,
         planner=planner,
@@ -41,6 +44,7 @@ def _init_components(runtime: str, model: str | None, max_agents: int):
         model=model or "",
         max_agents=max_agents,
         memory=memory,
+        lesson_store=lesson_store,
     )
     return orchestrator, store, pool
 
@@ -71,6 +75,7 @@ def run(task: str, runtime: str, model: str | None, max_agents: int):
 @main.command()
 def status():
     """Show active runs, agents, subtask progress."""
+    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     store = Store(DB_PATH)
     store.migrate()
     try:
@@ -90,6 +95,7 @@ def status():
 def clean():
     """Kill all agents, remove worktrees, reset state."""
     repo_root = str(Path.cwd())
+    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     store = Store(DB_PATH)
     store.migrate()
     tmux = TmuxManager()
@@ -109,6 +115,7 @@ def clean():
 def merge(run_id: str | None, dry_run: bool, force: bool):
     """Process merge queue for a run."""
     repo_root = str(Path.cwd())
+    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     store = Store(DB_PATH)
     store.migrate()
     worktrees = WorktreeManager(repo_root)

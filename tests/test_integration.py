@@ -142,9 +142,7 @@ async def test_orchestrator_full_lifecycle_success(orchestrator: Orchestrator, m
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_respects_dependency_ordering(
-    orchestrator: Orchestrator, mock_pool: MagicMock
-) -> None:
+async def test_orchestrator_respects_dependency_ordering(orchestrator: Orchestrator, mock_pool: MagicMock) -> None:
     """Test that dependencies are respected (subtask B waits for A)."""
     # Track the order of subtask dispatch
     dispatch_order: list[str] = []

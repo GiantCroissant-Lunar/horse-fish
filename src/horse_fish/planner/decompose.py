@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import uuid
 
+from horse_fish.agents.runtime import RUNTIME_REGISTRY
 from horse_fish.models import Subtask
 
 SYSTEM_PROMPT_TEMPLATE = """\
@@ -73,10 +75,17 @@ class Planner:
         return [part.format(model=self.model, prompt=prompt) if "{" in part else part for part in template]
 
     async def _run_cli(self, cmd: list[str]) -> str:
+        env = None
+        adapter = RUNTIME_REGISTRY.get(self.runtime)
+        if adapter:
+            extra = adapter.build_env()
+            if extra:
+                env = {**os.environ, **extra}
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=env,
         )
         stdout, stderr = await proc.communicate()
         if proc.returncode != 0:

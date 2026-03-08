@@ -17,7 +17,8 @@ def tmp_git_repo(tmp_path: Path) -> Path:
 
     async def init_repo() -> None:
         proc = await asyncio.create_subprocess_exec(
-            "git", "init",
+            "git",
+            "init",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=repo,
@@ -26,7 +27,10 @@ def tmp_git_repo(tmp_path: Path) -> Path:
 
         # Configure git user for commits
         proc = await asyncio.create_subprocess_exec(
-            "git", "config", "user.email", "test@example.com",
+            "git",
+            "config",
+            "user.email",
+            "test@example.com",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=repo,
@@ -34,7 +38,10 @@ def tmp_git_repo(tmp_path: Path) -> Path:
         await proc.communicate()
 
         proc = await asyncio.create_subprocess_exec(
-            "git", "config", "user.name", "Test User",
+            "git",
+            "config",
+            "user.name",
+            "Test User",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=repo,
@@ -44,7 +51,9 @@ def tmp_git_repo(tmp_path: Path) -> Path:
         # Create initial commit
         (repo / "README.md").write_text("# Test Repo")
         proc = await asyncio.create_subprocess_exec(
-            "git", "add", ".",
+            "git",
+            "add",
+            ".",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=repo,
@@ -52,7 +61,10 @@ def tmp_git_repo(tmp_path: Path) -> Path:
         await proc.communicate()
 
         proc = await asyncio.create_subprocess_exec(
-            "git", "commit", "-m", "Initial commit",
+            "git",
+            "commit",
+            "-m",
+            "Initial commit",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=repo,
@@ -61,7 +73,10 @@ def tmp_git_repo(tmp_path: Path) -> Path:
 
         # Rename default branch to main
         proc = await asyncio.create_subprocess_exec(
-            "git", "branch", "-m", "main",
+            "git",
+            "branch",
+            "-m",
+            "main",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=repo,
@@ -178,7 +193,9 @@ class TestWorktreeManager:
 
         # Add and commit in worktree
         proc = await asyncio.create_subprocess_exec(
-            "git", "add", ".",
+            "git",
+            "add",
+            ".",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=worktree_path,
@@ -186,7 +203,10 @@ class TestWorktreeManager:
         await proc.communicate()
 
         proc = await asyncio.create_subprocess_exec(
-            "git", "commit", "-m", "Add feature",
+            "git",
+            "commit",
+            "-m",
+            "Add feature",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=worktree_path,
@@ -221,14 +241,19 @@ class TestWorktreeManager:
         # Create a file in main
         (tmp_git_repo / "conflict.txt").write_text("main content")
         proc = await asyncio.create_subprocess_exec(
-            "git", "add", ".",
+            "git",
+            "add",
+            ".",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=tmp_git_repo,
         )
         await proc.communicate()
         proc = await asyncio.create_subprocess_exec(
-            "git", "commit", "-m", "Add conflict file",
+            "git",
+            "commit",
+            "-m",
+            "Add conflict file",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=tmp_git_repo,
@@ -241,14 +266,19 @@ class TestWorktreeManager:
 
         (worktree_path / "conflict.txt").write_text("conflicting content")
         proc = await asyncio.create_subprocess_exec(
-            "git", "add", ".",
+            "git",
+            "add",
+            ".",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=worktree_path,
         )
         await proc.communicate()
         proc = await asyncio.create_subprocess_exec(
-            "git", "commit", "-m", "Conflicting change",
+            "git",
+            "commit",
+            "-m",
+            "Conflicting change",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=worktree_path,
@@ -258,14 +288,19 @@ class TestWorktreeManager:
         # Modify the same file in main to cause conflict
         (tmp_git_repo / "conflict.txt").write_text("main modified content")
         proc = await asyncio.create_subprocess_exec(
-            "git", "add", ".",
+            "git",
+            "add",
+            ".",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=tmp_git_repo,
         )
         await proc.communicate()
         proc = await asyncio.create_subprocess_exec(
-            "git", "commit", "-m", "Main modification",
+            "git",
+            "commit",
+            "-m",
+            "Main modification",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=tmp_git_repo,
@@ -278,7 +313,9 @@ class TestWorktreeManager:
 
         # We should still be on main
         proc = await asyncio.create_subprocess_exec(
-            "git", "branch", "--show-current",
+            "git",
+            "branch",
+            "--show-current",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=tmp_git_repo,

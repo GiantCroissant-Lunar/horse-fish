@@ -33,9 +33,9 @@ class RunState(StrEnum):
 
 
 class TaskComplexity(StrEnum):
-    SOLO = "SOLO"  # 1 subtask max
-    TRIO = "TRIO"  # 3 subtasks max
-    SQUAD = "SQUAD"  # 8 subtasks max
+    solo = "SOLO"
+    trio = "TRIO"
+    squad = "SQUAD"
 
 
 class AgentSlot(BaseModel):
@@ -94,8 +94,6 @@ class Run(BaseModel):
     lessons: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     completed_at: datetime | None = None
-    complexity: TaskComplexity | None = None
-    lessons: list[str] = Field(default_factory=list)
 
     @classmethod
     def create(cls, task: str) -> Run:

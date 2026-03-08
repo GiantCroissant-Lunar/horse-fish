@@ -234,9 +234,7 @@ async def test_unknown_gate_returns_failed_result(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_all_returns_all_results_no_short_circuit(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+async def test_run_all_returns_all_results_no_short_circuit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """run_all should run every gate even if earlier ones fail."""
     calls: list = []
     processes = [

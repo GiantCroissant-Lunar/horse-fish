@@ -123,9 +123,7 @@ def test_lessons_table_exists(tmp_path: Path) -> None:
     """Lessons table should exist after migration."""
     store = make_store(tmp_path)
     store.migrate()
-    result = store.fetchone(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='lessons'"
-    )
+    result = store.fetchone("SELECT name FROM sqlite_master WHERE type='table' AND name='lessons'")
     assert result is not None
     store.close()
 
@@ -141,8 +139,15 @@ def test_lessons_insert_and_query(tmp_path: Path) -> None:
     store.execute(
         "INSERT INTO lessons (id, run_id, category, pattern, content, task_signature, created_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        ("lesson-1", "run-1", "planner", "over_decomposed",
-         "Task was split into 3 subtasks but only touched 1 file", "add version", "2026-03-08T00:00:00"),
+        (
+            "lesson-1",
+            "run-1",
+            "planner",
+            "over_decomposed",
+            "Task was split into 3 subtasks but only touched 1 file",
+            "add version",
+            "2026-03-08T00:00:00",
+        ),
     )
     row = store.fetchone("SELECT * FROM lessons WHERE id = ?", ("lesson-1",))
     assert row is not None
