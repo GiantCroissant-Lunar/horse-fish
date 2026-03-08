@@ -17,6 +17,11 @@ from horse_fish.planner.decompose import Planner
 from horse_fish.planner.smart import SmartPlanner
 from horse_fish.validation.gates import ValidationGates
 
+try:
+    from horse_fish.memory.cognee_store import CogneeMemory
+except ImportError:
+    CogneeMemory = None  # type: ignore[assignment,misc]
+
 logger = logging.getLogger(__name__)
 
 POLL_INTERVAL_SECONDS = 10
@@ -44,6 +49,7 @@ class Orchestrator:
         tracer: Tracer | None = None,
         memory: MemoryStore | None = None,
         lesson_store: LessonStore | None = None,
+        cognee_memory: CogneeMemory | None = None,
         stall_timeout_seconds: int = STALL_TIMEOUT_SECONDS,
         concurrency_limits: dict[RunState, int] | None = None,
     ) -> None:
@@ -58,7 +64,12 @@ class Orchestrator:
         self._tracer = tracer
         self._memory = memory
         self._lesson_store = lesson_store
-        self._smart_planner = SmartPlanner(planner, lesson_store=lesson_store) if lesson_store else None
+        self._cognee_memory = cognee_memory
+        self._smart_planner = (
+            SmartPlanner(planner, lesson_store=lesson_store, cognee_memory=cognee_memory)
+            if lesson_store or cognee_memory
+            else None
+        )
         self._stall_timeout = stall_timeout_seconds
         self._concurrency_limits = concurrency_limits or {}
 
@@ -100,13 +111,23 @@ class Orchestrator:
 
     async def _learn(self, run: Run) -> None:
         """Store completed run results in memory for future learning."""
+        subtask_results = [s.result for s in run.subtasks if s.result]
+
+        # Tier 1: memvid (agent-local, backward compat)
         if self._memory:
-            subtask_results = [s.result for s in run.subtasks if s.result]
             try:
                 await self._memory.store_run_result(run, subtask_results)
             except Exception as exc:
-                logger.warning("Failed to store run in memory: %s", exc)
+                logger.warning("Failed to store run in memvid: %s", exc)
 
+        # Tier 2: Cognee knowledge graph
+        if self._cognee_memory:
+            try:
+                await self._cognee_memory.ingest_run_result(run, subtask_results)
+            except Exception as exc:
+                logger.warning("Failed to ingest run into Cognee: %s", exc)
+
+        # Lessons (deterministic pattern extraction)
         if self._lesson_store:
             try:
                 lessons = self._lesson_store.extract_lessons(run)

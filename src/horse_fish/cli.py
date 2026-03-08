@@ -18,6 +18,11 @@ from horse_fish.planner.decompose import Planner
 from horse_fish.store.db import Store
 from horse_fish.validation.gates import ValidationGates
 
+try:
+    from horse_fish.memory.cognee_store import CogneeMemory
+except ImportError:
+    CogneeMemory = None  # type: ignore[assignment,misc]
+
 DB_PATH = ".horse-fish/state.db"
 
 
@@ -36,6 +41,7 @@ def _init_components(runtime: str, model: str | None, max_agents: int):
     gates = ValidationGates()
     memory = MemoryStore()
     lesson_store = LessonStore(store)
+    cognee_memory = CogneeMemory() if CogneeMemory else None
     orchestrator = Orchestrator(
         pool=pool,
         planner=planner,
@@ -45,6 +51,7 @@ def _init_components(runtime: str, model: str | None, max_agents: int):
         max_agents=max_agents,
         memory=memory,
         lesson_store=lesson_store,
+        cognee_memory=cognee_memory,
     )
     return orchestrator, store, pool
 
