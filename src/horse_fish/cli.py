@@ -12,7 +12,6 @@ from horse_fish.agents.tmux import TmuxManager
 from horse_fish.agents.worktree import WorktreeManager
 from horse_fish.memory.store import MemoryStore
 from horse_fish.merge.queue import MergeQueue
-from horse_fish.observability.traces import Tracer
 from horse_fish.orchestrator.engine import Orchestrator
 from horse_fish.planner.decompose import Planner
 from horse_fish.store.db import Store
@@ -33,7 +32,12 @@ def _init_components(runtime: str, model: str | None, max_agents: int):
     gates = ValidationGates()
     memory = MemoryStore()
     orchestrator = Orchestrator(
-        pool=pool, planner=planner, gates=gates, runtime=runtime, model=model or "", max_agents=max_agents,
+        pool=pool,
+        planner=planner,
+        gates=gates,
+        runtime=runtime,
+        model=model or "",
+        max_agents=max_agents,
         memory=memory,
     )
     return orchestrator, store, pool
@@ -136,6 +140,36 @@ def merge(run_id: str | None, dry_run: bool, force: bool):
                     click.echo(f"    Conflicts: {', '.join(result.conflict_files)}")
     finally:
         store.close()
+
+
+@main.command()
+@click.option("--agent", default=None, help="Show logs for a specific agent")
+@click.option("--lines", default=20, type=int, help="Number of lines to show per agent")
+def logs(agent, lines):
+    """View agent tmux output."""
+    tmux = TmuxManager()
+    if agent:
+        output = asyncio.run(tmux.capture_pane(agent))
+        if output is None:
+            click.echo(f"Agent '{agent}' not found or no output available.")
+            return
+        tail = "\n".join(output.splitlines()[-lines:]) if output.strip() else "(empty)"
+        click.echo(f"--- {agent} ---")
+        click.echo(tail)
+    else:
+        sessions = asyncio.run(tmux.list_sessions())
+        hf_sessions = [s for s in sessions if s.startswith("hf-")]
+        if not hf_sessions:
+            click.echo("No active horse-fish agents.")
+            return
+        for session in hf_sessions:
+            output = asyncio.run(tmux.capture_pane(session))
+            if output is None:
+                continue
+            tail = "\n".join(output.splitlines()[-lines:]) if output.strip() else "(empty)"
+            click.echo(f"--- {session} ---")
+            click.echo(tail)
+            click.echo()
 
 
 if __name__ == "__main__":

@@ -183,10 +183,20 @@ def test_merge_dry_run_shows_pending(mock_store_class, mock_worktrees_class, moc
     mock_merge_queue = MagicMock()
     mock_merge_queue.pending = AsyncMock(
         return_value=[
-            {"subtask_id": "task-1", "agent_name": "agent-1", "branch": "horse-fish/agent-1",
-             "priority": 0, "created_at": "2026-03-08T10:00:00Z"},
-            {"subtask_id": "task-2", "agent_name": "agent-2", "branch": "horse-fish/agent-2",
-             "priority": 1, "created_at": "2026-03-08T10:01:00Z"},
+            {
+                "subtask_id": "task-1",
+                "agent_name": "agent-1",
+                "branch": "horse-fish/agent-1",
+                "priority": 0,
+                "created_at": "2026-03-08T10:00:00Z",
+            },
+            {
+                "subtask_id": "task-2",
+                "agent_name": "agent-2",
+                "branch": "horse-fish/agent-2",
+                "priority": 1,
+                "created_at": "2026-03-08T10:01:00Z",
+            },
         ]
     )
     mock_merge_queue_class.return_value = mock_merge_queue
@@ -252,3 +262,64 @@ def test_merge_dry_run_no_pending_shows_message(mock_store_class, mock_worktrees
     assert "No pending merges in queue" in result.output
     mock_store.migrate.assert_called_once()
     mock_store.close.assert_called_once()
+
+
+@patch("horse_fish.cli.TmuxManager")
+def test_logs_lists_all_sessions(mock_tmux_class, runner):
+    """Test 'hf logs' lists only hf- sessions."""
+    mock_tmux = MagicMock()
+    mock_tmux.list_sessions = AsyncMock(return_value=["hf-agent-1", "hf-agent-2", "unrelated"])
+    mock_tmux.capture_pane = AsyncMock(return_value="some output")
+    mock_tmux_class.return_value = mock_tmux
+
+    result = runner.invoke(main, ["logs"])
+
+    assert result.exit_code == 0
+    assert "--- hf-agent-1 ---" in result.output
+    assert "--- hf-agent-2 ---" in result.output
+    assert "unrelated" not in result.output
+    mock_tmux.list_sessions.assert_called_once()
+
+
+@patch("horse_fish.cli.TmuxManager")
+def test_logs_single_agent(mock_tmux_class, runner):
+    """Test 'hf logs --agent' shows output for single agent."""
+    mock_tmux = MagicMock()
+    mock_tmux.capture_pane = AsyncMock(return_value="line1\nline2\nline3")
+    mock_tmux_class.return_value = mock_tmux
+
+    result = runner.invoke(main, ["logs", "--agent", "hf-agent-1"])
+
+    assert result.exit_code == 0
+    assert "--- hf-agent-1 ---" in result.output
+    assert "line1" in result.output
+    mock_tmux.capture_pane.assert_called_once_with("hf-agent-1")
+
+
+@patch("horse_fish.cli.TmuxManager")
+def test_logs_agent_not_found(mock_tmux_class, runner):
+    """Test 'hf logs --agent' shows message when agent not found."""
+    mock_tmux = MagicMock()
+    mock_tmux.capture_pane = AsyncMock(return_value=None)
+    mock_tmux_class.return_value = mock_tmux
+
+    result = runner.invoke(main, ["logs", "--agent", "hf-agent-1"])
+
+    assert result.exit_code == 0
+    assert "not found" in result.output.lower() or "no output" in result.output.lower()
+    mock_tmux.capture_pane.assert_called_once_with("hf-agent-1")
+
+
+@patch("horse_fish.cli.TmuxManager")
+def test_logs_no_sessions(mock_tmux_class, runner):
+    """Test 'hf logs' shows message when no hf- sessions exist."""
+    mock_tmux = MagicMock()
+    mock_tmux.list_sessions = AsyncMock(return_value=["unrelated"])
+    mock_tmux_class.return_value = mock_tmux
+
+    result = runner.invoke(main, ["logs"])
+
+    assert result.exit_code == 0
+    assert "No active" in result.output
+    assert "horse-fish agents" in result.output
+    mock_tmux.list_sessions.assert_called_once()
