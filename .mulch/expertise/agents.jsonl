@@ -1,0 +1,1 @@
+{"type":"pattern","name":"async-git-worktree","description":"Git worktree operations via asyncio.create_subprocess_exec. Handle branch prefix refs/heads/ in porcelain output. Use git add -N to include untracked files in diff.","classification":"tactical","recorded_at":"2026-03-08T09:26:13.692Z","outcomes":[{"status":"success","agent":"worktree-pi"}],"id":"mx-82b27f"}

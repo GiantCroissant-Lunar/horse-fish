@@ -1,0 +1,1 @@
+{"type":"pattern","name":"git-test-fixtures","description":"Use tmp_path fixture with git init and branch rename to main for isolated git test repos. Git init creates master branch by default - rename with git branch -m main.","classification":"tactical","recorded_at":"2026-03-08T09:26:17.389Z","outcomes":[{"status":"success","agent":"worktree-pi"}],"id":"mx-55d1a4"}
