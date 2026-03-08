@@ -13,6 +13,9 @@ memory = [
     "sqlite-vec>=0.1",
     "fastembed>=0.4",
 ]
+observability = [
+    "langfuse>=2.0",
+]
 dev = [
     "pytest>=8",
     "pytest-asyncio>=0.24",
