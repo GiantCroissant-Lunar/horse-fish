@@ -59,9 +59,9 @@ runtime:
   default: claude
   shellInitDelayMs: 0
   pi:
-    provider: kimi-coding
-    model: kimi-for-coding
+    provider: dashscope
+    model: qwen3.5-plus
     modelMap:
-      opus: kimi-coding/kimi-for-coding
-      sonnet: kimi-coding/kimi-for-coding
-      haiku: kimi-coding/kimi-for-coding
+      opus: dashscope/qwen3.5-plus
+      sonnet: dashscope/qwen3.5-plus
+      haiku: dashscope/qwen3.5-plus
