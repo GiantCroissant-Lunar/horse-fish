@@ -57,7 +57,7 @@ class CogneeMemory:
         # Primary LLM (Mercury 2)
         self._llm_api_key = llm_api_key or os.environ.get("INCEPTION_API_KEY", "")
         self._llm_endpoint = llm_endpoint or "https://api.inceptionlabs.ai/v1"
-        self._llm_model = llm_model or "openai/mercury-coder-small"
+        self._llm_model = llm_model or "openai/mercury-2"
 
         # Fallback LLM (Dashscope/qwen)
         self._fallback_llm_api_key = fallback_llm_api_key or os.environ.get("DASHSCOPE_API_KEY", "")
@@ -68,33 +68,74 @@ class CogneeMemory:
         """Configure Cognee providers. Lazy — called on first use."""
         self._data_dir.mkdir(parents=True, exist_ok=True)
 
-        cognee.config.set_classification_model(None)
+        # Embedding: FastEmbed (local, CPU) — configured via env vars because
+        # cognee.config has no set_embedding_provider/set_embedding_model methods
+        os.environ.setdefault("EMBEDDING_PROVIDER", "fastembed")
+        os.environ.setdefault("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+        os.environ.setdefault("EMBEDDING_DIMENSIONS", "384")
 
-        # Embedding: FastEmbed (local, CPU)
-        cognee.config.set_embedding_provider("fastembed")
-        cognee.config.set_embedding_model("sentence-transformers/all-MiniLM-L6-v2")
+        # Skip connection test — cognee has a bug where the custom provider
+        # endpoint is not passed to the GenericAPIAdapter in test_llm_connection
+        os.environ["COGNEE_SKIP_CONNECTION_TEST"] = "true"
 
         # Vector store: LanceDB (file-based)
         cognee.config.set_vector_db_provider("lancedb")
         cognee.config.set_vector_db_url(str(self._data_dir / "lancedb"))
 
         # Graph store: Kuzu (file-based)
-        cognee.config.set_graph_db_provider("kuzu")
+        cognee.config.set_graph_database_provider("kuzu")
         cognee.config.system_root_directory(str(self._data_dir))
 
-        # LLM
+        # LLM — use set_llm_config dict for full control including endpoint
         if use_fallback:
-            cognee.config.set_llm_provider("custom")
-            cognee.config.set_llm_api_key(self._fallback_llm_api_key)
-            cognee.config.set_llm_model(self._fallback_llm_model)
-            cognee.config.set_llm_endpoint(self._fallback_llm_endpoint)
+            cognee.config.set_llm_config(
+                {
+                    "llm_provider": "custom",
+                    "llm_api_key": self._fallback_llm_api_key,
+                    "llm_model": self._fallback_llm_model,
+                    "llm_endpoint": self._fallback_llm_endpoint,
+                }
+            )
         else:
-            cognee.config.set_llm_provider("custom")
-            cognee.config.set_llm_api_key(self._llm_api_key)
-            cognee.config.set_llm_model(self._llm_model)
-            cognee.config.set_llm_endpoint(self._llm_endpoint)
+            cognee.config.set_llm_config(
+                {
+                    "llm_provider": "custom",
+                    "llm_api_key": self._llm_api_key,
+                    "llm_model": self._llm_model,
+                    "llm_endpoint": self._llm_endpoint,
+                }
+            )
+
+        # Monkey-patch: fix cognee bug where custom provider endpoint is not
+        # passed to GenericAPIAdapter in get_llm_client()
+        self._patch_custom_endpoint()
 
         self._configured = True
+
+    @staticmethod
+    def _patch_custom_endpoint() -> None:
+        """Patch cognee's get_llm_client to pass endpoint for custom provider."""
+        try:
+            from cognee.infrastructure.llm.structured_output_framework.litellm_instructor.llm import (
+                get_llm_client as client_module,
+            )
+
+            _original = client_module.get_llm_client
+
+            def _patched(raise_api_key_error: bool = True):
+                client = _original(raise_api_key_error)
+                # If endpoint wasn't set on the adapter, inject it from config
+                if hasattr(client, "endpoint") and not client.endpoint:
+                    from cognee.infrastructure.llm import get_llm_config
+
+                    cfg = get_llm_config()
+                    if cfg.llm_endpoint:
+                        client.endpoint = cfg.llm_endpoint
+                return client
+
+            client_module.get_llm_client = _patched
+        except Exception:
+            pass
 
     def _ensure_configured(self) -> None:
         if not self._configured:
