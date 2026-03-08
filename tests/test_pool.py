@@ -40,6 +40,7 @@ async def test_spawn_creates_worktree_and_tmux_session_and_persists_slot() -> No
     store = make_store()
     tmux = MagicMock()
     tmux.spawn = AsyncMock(return_value=1234)
+    tmux.capture_pane = AsyncMock(return_value="Ready\n❯ \n")
     worktrees = MagicMock()
     worktrees.create = AsyncMock(return_value=make_worktree_info("agent-1"))
 
@@ -79,6 +80,82 @@ async def test_spawn_raises_for_unknown_runtime() -> None:
         await pool.spawn("agent-1", "nonexistent", "model-x", "builder")
 
 
+@pytest.mark.asyncio
+async def test_spawn_waits_for_ready_pattern() -> None:
+    """Test that spawn waits for the ready pattern before proceeding."""
+    store = make_store()
+    tmux = MagicMock()
+    tmux.spawn = AsyncMock(return_value=1234)
+    tmux.capture_pane = AsyncMock(side_effect=["Loading...\n", "Loading...\n❯ \n"])
+    worktrees = MagicMock()
+    worktrees.create = AsyncMock(return_value=make_worktree_info("agent-1"))
+
+    pool = make_pool(store, tmux, worktrees)
+    slot = await pool.spawn("agent-1", "claude", "claude-sonnet-4-6", "builder")
+
+    # Verify capture_pane was called at least twice (polling)
+    assert tmux.capture_pane.call_count >= 2
+    assert isinstance(slot, AgentSlot)
+    assert slot.name == "agent-1"
+
+
+@pytest.mark.asyncio
+async def test_spawn_raises_on_ready_timeout() -> None:
+    """Test that spawn raises RuntimeError when ready timeout is exceeded."""
+    store = make_store()
+    tmux = MagicMock()
+    tmux.spawn = AsyncMock(return_value=1234)
+    tmux.capture_pane = AsyncMock(return_value="Loading...\n")
+    tmux.kill_session = AsyncMock()
+    worktrees = MagicMock()
+    worktrees.create = AsyncMock(return_value=make_worktree_info("agent-1"))
+    worktrees.remove = AsyncMock()
+
+    pool = make_pool(store, tmux, worktrees)
+
+    # Patch the runtime registry to use a short timeout for testing
+    from horse_fish.agents import runtime
+
+    original_registry_entry = runtime.RUNTIME_REGISTRY["claude"]
+
+    # Create a modified runtime with short timeout
+    class FastTimeoutClaudeRuntime:
+        runtime_id = "claude"
+        ready_pattern = r"[❯>]\s*$"
+        ready_timeout_seconds = 2
+
+        def build_spawn_command(self, model: str) -> str:
+            return "claude"
+
+        def build_env(self) -> dict[str, str]:
+            return {}
+
+    try:
+        runtime.RUNTIME_REGISTRY["claude"] = FastTimeoutClaudeRuntime()
+        with pytest.raises(RuntimeError, match="ready"):
+            await pool.spawn("agent-1", "claude", "claude-sonnet-4-6", "builder")
+    finally:
+        runtime.RUNTIME_REGISTRY["claude"] = original_registry_entry
+
+
+@pytest.mark.asyncio
+async def test_spawn_works_with_pi_ready_pattern() -> None:
+    """Test that spawn works with Pi's ready pattern."""
+    store = make_store()
+    tmux = MagicMock()
+    tmux.spawn = AsyncMock(return_value=1234)
+    tmux.capture_pane = AsyncMock(return_value="Welcome to Pi\n> \n")
+    worktrees = MagicMock()
+    worktrees.create = AsyncMock(return_value=make_worktree_info("agent-1"))
+
+    pool = make_pool(store, tmux, worktrees)
+    slot = await pool.spawn("agent-1", "pi", "kimi-for-coding", "builder")
+
+    assert isinstance(slot, AgentSlot)
+    assert slot.name == "agent-1"
+    assert slot.runtime == "pi"
+
+
 # ---------------------------------------------------------------------------
 # send_task
 # ---------------------------------------------------------------------------
@@ -90,6 +167,7 @@ async def test_send_task_sends_keys_and_marks_agent_busy() -> None:
     tmux = MagicMock()
     tmux.spawn = AsyncMock(return_value=9)
     tmux.send_keys = AsyncMock()
+    tmux.capture_pane = AsyncMock(return_value="Ready\n> \n")
     worktrees = MagicMock()
     worktrees.create = AsyncMock(return_value=make_worktree_info())
 
@@ -121,6 +199,7 @@ async def test_check_status_returns_idle_when_alive() -> None:
     tmux = MagicMock()
     tmux.spawn = AsyncMock(return_value=5)
     tmux.is_alive = AsyncMock(return_value=True)
+    tmux.capture_pane = AsyncMock(return_value="Ready\n❯ \n")
     worktrees = MagicMock()
     worktrees.create = AsyncMock(return_value=make_worktree_info())
 
@@ -137,6 +216,7 @@ async def test_check_status_marks_dead_when_session_gone() -> None:
     tmux = MagicMock()
     tmux.spawn = AsyncMock(return_value=5)
     tmux.is_alive = AsyncMock(return_value=False)
+    tmux.capture_pane = AsyncMock(return_value="Ready\n❯ \n")
     worktrees = MagicMock()
     worktrees.create = AsyncMock(return_value=make_worktree_info())
 
@@ -160,7 +240,7 @@ async def test_collect_result_returns_subtask_result_with_output_and_diff() -> N
     store = make_store()
     tmux = MagicMock()
     tmux.spawn = AsyncMock(return_value=7)
-    tmux.capture_pane = AsyncMock(return_value="build success\n")
+    tmux.capture_pane = AsyncMock(side_effect=["Ready\n> \n", "build success\n"])
     worktrees = MagicMock()
     worktrees.create = AsyncMock(return_value=make_worktree_info())
     worktrees.get_diff = AsyncMock(return_value="diff --git a/foo.py")
@@ -182,7 +262,7 @@ async def test_collect_result_marks_not_successful_when_pane_empty() -> None:
     store = make_store()
     tmux = MagicMock()
     tmux.spawn = AsyncMock(return_value=7)
-    tmux.capture_pane = AsyncMock(return_value=None)
+    tmux.capture_pane = AsyncMock(side_effect=["Ready\n> \n", None])
     worktrees = MagicMock()
     worktrees.create = AsyncMock(return_value=make_worktree_info())
     worktrees.get_diff = AsyncMock(return_value="")
@@ -206,6 +286,7 @@ async def test_release_kills_session_removes_worktree_marks_dead() -> None:
     tmux = MagicMock()
     tmux.spawn = AsyncMock(return_value=3)
     tmux.kill_session = AsyncMock()
+    tmux.capture_pane = AsyncMock(return_value="Ready\n❯ \n")
     worktrees = MagicMock()
     worktrees.create = AsyncMock(return_value=make_worktree_info())
     worktrees.remove = AsyncMock()
@@ -232,10 +313,12 @@ async def test_list_agents_returns_all_slots() -> None:
     store = make_store()
     tmux = MagicMock()
     tmux.spawn = AsyncMock(side_effect=[1, 2])
+    # Return appropriate ready pattern for each runtime (claude uses ❯, copilot uses >)
+    tmux.capture_pane = AsyncMock(side_effect=["Ready\n❯ \n", "Ready\n> \n"])
+    tmux.kill_session = AsyncMock()
     worktrees = MagicMock()
-    worktrees.create = AsyncMock(
-        side_effect=[make_worktree_info("agent-1"), make_worktree_info("agent-2")]
-    )
+    worktrees.create = AsyncMock(side_effect=[make_worktree_info("agent-1"), make_worktree_info("agent-2")])
+    worktrees.remove = AsyncMock()
 
     pool = make_pool(store, tmux, worktrees)
     await pool.spawn("agent-1", "claude", "model", "builder")
@@ -260,10 +343,9 @@ async def test_cleanup_releases_dead_and_idle_agents() -> None:
     tmux.send_keys = AsyncMock()
     tmux.is_alive = AsyncMock(return_value=False)
     tmux.kill_session = AsyncMock()
+    tmux.capture_pane = AsyncMock(return_value="Ready\n❯ \n")
     worktrees = MagicMock()
-    worktrees.create = AsyncMock(
-        side_effect=[make_worktree_info("agent-1"), make_worktree_info("agent-2")]
-    )
+    worktrees.create = AsyncMock(side_effect=[make_worktree_info("agent-1"), make_worktree_info("agent-2")])
     worktrees.remove = AsyncMock()
     worktrees.cleanup = AsyncMock(return_value=0)
 
@@ -285,6 +367,7 @@ async def test_cleanup_skips_busy_agents() -> None:
     tmux.spawn = AsyncMock(return_value=1)
     tmux.send_keys = AsyncMock()
     tmux.kill_session = AsyncMock()
+    tmux.capture_pane = AsyncMock(return_value="Ready\n❯ \n")
     worktrees = MagicMock()
     worktrees.create = AsyncMock(return_value=make_worktree_info())
     worktrees.remove = AsyncMock()
