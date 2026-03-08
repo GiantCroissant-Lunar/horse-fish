@@ -7,6 +7,7 @@ domains:
   - orchestrator
   - architecture
   - e2e
+  - store
 governance:
   max_entries: 100
   warn_entries: 150
