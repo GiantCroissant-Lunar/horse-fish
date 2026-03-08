@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
+from horse_fish.agents.prompt import build_prompt
 from horse_fish.agents.runtime import RUNTIME_REGISTRY
 from horse_fish.agents.tmux import TmuxManager
 from horse_fish.agents.worktree import WorktreeManager
@@ -15,10 +16,17 @@ from horse_fish.store.db import Store
 class AgentPool:
     """Manages the full lifecycle of agent slots: spawn, task, collect, release."""
 
-    def __init__(self, store: Store, tmux: TmuxManager, worktrees: WorktreeManager) -> None:
+    def __init__(
+        self,
+        store: Store,
+        tmux: TmuxManager,
+        worktrees: WorktreeManager,
+        project_context: str | None = None,
+    ) -> None:
         self._store = store
         self._tmux = tmux
         self._worktrees = worktrees
+        self._project_context = project_context
 
     async def spawn(self, name: str, runtime: str, model: str, capability: str) -> AgentSlot:
         """Create a worktree, start a tmux session, persist the slot, and return it."""
@@ -77,7 +85,13 @@ class AgentPool:
     async def send_task(self, agent_id: str, prompt: str) -> None:
         """Send a prompt to the agent's tmux session and mark it busy."""
         slot = self._get_slot(agent_id)
-        await self._tmux.send_keys(slot.tmux_session, prompt)
+        full_prompt = build_prompt(
+            task=prompt,
+            worktree_path=slot.worktree_path or "",
+            branch=slot.branch or "",
+            project_context=self._project_context,
+        )
+        await self._tmux.send_keys(slot.tmux_session, full_prompt)
         self._store.execute("UPDATE agents SET state = ? WHERE id = ?", (AgentState.busy, agent_id))
 
     async def check_status(self, agent_id: str) -> AgentState:

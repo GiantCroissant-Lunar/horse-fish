@@ -27,7 +27,9 @@ def _init_components(runtime: str, model: str | None, max_agents: int):
     store.migrate()
     tmux = TmuxManager()
     worktrees = WorktreeManager(repo_root)
-    pool = AgentPool(store, tmux, worktrees)
+    claude_md = Path.cwd() / "CLAUDE.md"
+    project_context = claude_md.read_text() if claude_md.exists() else None
+    pool = AgentPool(store, tmux, worktrees, project_context=project_context)
     planner = Planner(runtime=runtime, model=model)
     gates = ValidationGates()
     memory = MemoryStore()
