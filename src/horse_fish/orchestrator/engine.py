@@ -40,6 +40,7 @@ class Orchestrator:
         merge_queue: MergeQueue | None = None,
         tracer: Tracer | None = None,
         memory: MemoryStore | None = None,
+        concurrency_limits: dict[RunState, int] | None = None,
     ) -> None:
         self._pool = pool
         self._planner = planner
@@ -51,6 +52,7 @@ class Orchestrator:
         self._merge_queue = merge_queue
         self._tracer = tracer
         self._memory = memory
+        self._concurrency_limits = concurrency_limits or {}
 
         self._handlers: dict[RunState, _Handler] = {
             RunState.planning: self._plan,
@@ -126,7 +128,8 @@ class Orchestrator:
             for subtask in run.subtasks:
                 if subtask.state != SubtaskState.pending:
                     continue
-                if active_count >= self._max_agents:
+                max_concurrent = self._concurrency_limits.get(RunState.executing, self._max_agents)
+                if active_count >= max_concurrent:
                     break
                 if not self._deps_met(run, subtask):
                     continue

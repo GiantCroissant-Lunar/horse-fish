@@ -1026,3 +1026,69 @@ async def test_run_does_not_store_memory_on_failure(mock_pool, mock_planner, moc
 
     assert run.state == RunState.failed
     mock_memory.store_run_result.assert_not_called()
+
+
+# --- Task 4: Per-state concurrency limits tests ---
+
+
+def test_orchestrator_accepts_per_state_limits(mock_pool, mock_planner, mock_gates):
+    """Test Orchestrator accepts per-state concurrency limits."""
+    limits = {RunState.executing: 5, RunState.reviewing: 2}
+    orch = Orchestrator(
+        pool=mock_pool, planner=mock_planner, gates=mock_gates,
+        runtime="claude", max_agents=3, concurrency_limits=limits,
+    )
+    assert orch._concurrency_limits[RunState.executing] == 5
+    assert orch._concurrency_limits[RunState.reviewing] == 2
+
+
+@pytest.mark.asyncio
+async def test_execute_respects_per_state_concurrency_limit(mock_pool, mock_planner, mock_gates):
+    """Test _execute uses per-state limit instead of global max_agents."""
+    # Global max is 10 but execute-state limit is 1
+    limits = {RunState.executing: 1}
+    orchestrator = Orchestrator(
+        pool=mock_pool, planner=mock_planner, gates=mock_gates,
+        runtime="claude", max_agents=10, concurrency_limits=limits,
+    )
+
+    subtask1 = Subtask(id="s1", description="Task 1")
+    subtask2 = Subtask(id="s2", description="Task 2")
+    run = Run.create("Build system")
+    run.subtasks = [subtask1, subtask2]
+    run.state = RunState.executing
+
+    spawned_agents = []
+    slot_counter = 0
+
+    async def mock_spawn(**kwargs):
+        nonlocal slot_counter
+        slot_counter += 1
+        slot = AgentSlot(
+            id=f"agent-{slot_counter}", name=f"hf-{slot_counter}",
+            runtime="claude", model="claude-sonnet-4.6",
+            capability="builder", state=AgentState.busy,
+        )
+        spawned_agents.append(slot)
+        return slot
+
+    mock_pool.spawn = AsyncMock(side_effect=mock_spawn)
+    mock_pool.send_task = AsyncMock()
+    mock_pool.check_status = AsyncMock(return_value=AgentState.dead)
+    mock_pool.collect_result = AsyncMock(
+        return_value=SubtaskResult(
+            subtask_id="test", success=True, output="Done",
+            diff="commit", duration_seconds=10.0,
+        )
+    )
+
+    async def mock_sleep(seconds):
+        return None
+
+    with pytest.MonkeyPatch().context() as m:
+        m.setattr("horse_fish.orchestrator.engine.asyncio.sleep", mock_sleep)
+        result = await orchestrator._execute(run)
+
+    assert result.state == RunState.reviewing
+    # Both subtasks complete, but only 1 at a time
+    assert all(s.state == SubtaskState.done for s in run.subtasks)
