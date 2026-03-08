@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import re
 import uuid
 from datetime import UTC, datetime
 
@@ -47,6 +49,9 @@ class AgentPool:
             branch=worktree.branch,
             started_at=datetime.now(UTC),
         )
+
+        # Wait for the runtime to show its ready prompt before proceeding
+        await self._wait_for_ready(slot)
 
         self._store.execute(
             """
@@ -131,6 +136,25 @@ class AgentPool:
                     pass
         await self._worktrees.cleanup()
         return released
+
+    async def _wait_for_ready(self, slot: AgentSlot) -> None:
+        """Wait for the agent runtime to show its ready prompt."""
+        adapter = RUNTIME_REGISTRY[slot.runtime]
+        pattern = re.compile(adapter.ready_pattern, re.MULTILINE)
+        timeout = adapter.ready_timeout_seconds
+        elapsed = 0.0
+
+        while elapsed < timeout:
+            output = await self._tmux.capture_pane(slot.tmux_session)
+            if output and pattern.search(output):
+                return
+            await asyncio.sleep(1.0)
+            elapsed += 1.0
+
+        # Timeout: kill session and remove worktree
+        await self._tmux.kill_session(slot.tmux_session)
+        await self._worktrees.remove(slot.name)
+        raise RuntimeError(f"Agent {slot.name!r} (runtime={slot.runtime}) did not become ready within {timeout}s")
 
     def _get_slot(self, agent_id: str) -> AgentSlot:
         row = self._store.fetchone("SELECT * FROM agents WHERE id = ?", (agent_id,))
