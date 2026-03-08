@@ -105,6 +105,41 @@ class TestSubtaskResult:
         assert result.success is True
         assert result.duration_seconds == 1.5
 
+    def test_provenance_fields(self):
+        """Test SubtaskResult has provenance metadata."""
+        from datetime import UTC, datetime
+
+        now = datetime.now(UTC)
+        result = SubtaskResult(
+            subtask_id="s1",
+            success=True,
+            output="Done",
+            diff="commit",
+            duration_seconds=10.0,
+            agent_id="agent-1",
+            agent_runtime="claude",
+            agent_model="claude-sonnet-4.6",
+            run_id="run-1",
+            completed_at=now,
+        )
+        assert result.agent_id == "agent-1"
+        assert result.agent_runtime == "claude"
+        assert result.agent_model == "claude-sonnet-4.6"
+        assert result.run_id == "run-1"
+        assert result.completed_at == now
+
+    def test_provenance_defaults(self):
+        """Test SubtaskResult provenance fields default to None."""
+        result = SubtaskResult(
+            subtask_id="s1", success=True, output="Done",
+            diff="", duration_seconds=5.0,
+        )
+        assert result.agent_id is None
+        assert result.agent_runtime is None
+        assert result.agent_model is None
+        assert result.run_id is None
+        assert result.completed_at is None
+
 
 class TestSubtask:
     def test_create_factory(self):
