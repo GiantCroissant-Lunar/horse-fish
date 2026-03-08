@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -1026,3 +1027,242 @@ async def test_run_does_not_store_memory_on_failure(mock_pool, mock_planner, moc
 
     assert run.state == RunState.failed
     mock_memory.store_run_result.assert_not_called()
+
+
+# --- Task 3: Stall Detection tests ---
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_accepts_stall_timeout_param(mock_pool, mock_planner, mock_gates):
+    """Test Orchestrator accepts stall_timeout_seconds parameter."""
+    orchestrator = Orchestrator(
+        pool=mock_pool,
+        planner=mock_planner,
+        gates=mock_gates,
+        runtime="claude",
+        stall_timeout_seconds=60,
+    )
+    assert orchestrator._stall_timeout == 60
+
+
+@pytest.mark.asyncio
+async def test_execute_sets_last_activity_at_on_dispatch(mock_pool, mock_planner, mock_gates):
+    """Test _execute sets last_activity_at when dispatching a subtask."""
+    from datetime import UTC, datetime
+
+    orchestrator = Orchestrator(
+        pool=mock_pool,
+        planner=mock_planner,
+        gates=mock_gates,
+        runtime="claude",
+        stall_timeout_seconds=30,
+    )
+
+    subtask = Subtask(id="subtask-1", description="Task 1")
+    run = Run.create("Build system")
+    run.subtasks = [subtask]
+    run.state = RunState.executing
+
+    slot = AgentSlot(
+        id="agent-1",
+        name="hf-subtask-1",
+        runtime="claude",
+        model="claude-sonnet-4.6",
+        capability="builder",
+        state=AgentState.busy,
+    )
+    mock_pool.spawn.return_value = slot
+    mock_pool.send_task = AsyncMock()
+    mock_pool.check_status = AsyncMock(return_value=AgentState.dead)
+    mock_pool.collect_result = AsyncMock(
+        return_value=SubtaskResult(
+            subtask_id="subtask-1",
+            success=True,
+            output="Done",
+            diff="commit",
+            duration_seconds=10.0,
+        )
+    )
+
+    async def mock_sleep(seconds):
+        return None
+
+    before_time = datetime.now(UTC)
+    with pytest.MonkeyPatch().context() as m:
+        m.setattr("horse_fish.orchestrator.engine.asyncio.sleep", mock_sleep)
+        result = await orchestrator._execute(run)
+
+    after_time = datetime.now(UTC)
+    assert result.state == RunState.reviewing
+    assert subtask.last_activity_at is not None
+    assert before_time <= subtask.last_activity_at <= after_time
+
+
+@pytest.mark.asyncio
+async def test_execute_detects_stalled_agent_and_retries(mock_pool, mock_planner, mock_gates):
+    """Test _execute detects a stalled agent and retries the subtask."""
+    from datetime import timedelta
+
+    orchestrator = Orchestrator(
+        pool=mock_pool,
+        planner=mock_planner,
+        gates=mock_gates,
+        runtime="claude",
+        stall_timeout_seconds=30,
+    )
+
+    subtask = Subtask(id="subtask-1", description="Task 1")
+    # Simulate: subtask was dispatched and is now running with stale activity
+    subtask.state = SubtaskState.running
+    subtask.agent = "agent-1"
+    subtask.last_activity_at = datetime.now(UTC) - timedelta(seconds=60)
+
+    run = Run.create("Build system")
+    run.subtasks = [subtask]
+    run.state = RunState.executing
+
+    # Mock release method
+    mock_pool.release = AsyncMock()
+
+    # Mock spawn for retry
+    slot = AgentSlot(
+        id="agent-2", name="hf-retry", runtime="claude",
+        model="claude-sonnet-4.6", capability="builder", state=AgentState.busy,
+    )
+    mock_pool.spawn.return_value = slot
+    mock_pool.send_task = AsyncMock()
+
+    # After retry, agent completes immediately
+    mock_pool.check_status = AsyncMock(return_value=AgentState.dead)
+    mock_pool.collect_result = AsyncMock(
+        return_value=SubtaskResult(
+            subtask_id="subtask-1", success=True, output="Done", diff="commit", duration_seconds=10
+        )
+    )
+
+    # Manually set up agent_map as if dispatch happened
+    # We'll patch _check_stalls to have the correct agent_map
+    original_check_stalls = orchestrator._check_stalls
+
+    async def patched_check_stalls(run, agent_map):
+        # Add the stalled agent to the map
+        agent_map["subtask-1"] = "agent-1"
+        return await original_check_stalls(run, agent_map)
+
+    orchestrator._check_stalls = patched_check_stalls
+
+    async def mock_sleep(seconds):
+        return None
+
+    with pytest.MonkeyPatch().context() as m:
+        m.setattr("horse_fish.orchestrator.engine.asyncio.sleep", mock_sleep)
+        result = await orchestrator._execute(run)
+
+    assert subtask.retry_count >= 1
+    mock_pool.release.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_execute_fails_after_max_retries(mock_pool, mock_planner, mock_gates):
+    """Test _execute marks subtask failed after max retries exhausted."""
+    from datetime import timedelta
+
+    orchestrator = Orchestrator(
+        pool=mock_pool,
+        planner=mock_planner,
+        gates=mock_gates,
+        runtime="claude",
+        stall_timeout_seconds=30,
+    )
+
+    subtask = Subtask(id="subtask-1", description="Task 1", max_retries=0)
+    subtask.state = SubtaskState.running
+    subtask.agent = "agent-1"
+    subtask.last_activity_at = datetime.now(UTC) - timedelta(seconds=60)
+
+    run = Run.create("Build system")
+    run.subtasks = [subtask]
+    run.state = RunState.executing
+
+    mock_pool.check_status = AsyncMock(return_value=AgentState.busy)
+    mock_pool.collect_result = AsyncMock(
+        return_value=SubtaskResult(
+            subtask_id="subtask-1", success=False, output="", diff="", duration_seconds=0
+        )
+    )
+    mock_pool.release = AsyncMock()
+
+    async def mock_sleep(seconds):
+        return None
+
+    with pytest.MonkeyPatch().context() as m:
+        m.setattr("horse_fish.orchestrator.engine.asyncio.sleep", mock_sleep)
+        result = await orchestrator._execute(run)
+
+    assert result.state == RunState.failed
+    assert subtask.state == SubtaskState.failed
+
+
+@pytest.mark.asyncio
+async def test_check_stalls_no_stalled_subtasks(mock_pool, mock_planner, mock_gates):
+    """Test _check_stalls returns 0 when no subtasks are stalled."""
+    orchestrator = Orchestrator(
+        pool=mock_pool,
+        planner=mock_planner,
+        gates=mock_gates,
+        runtime="claude",
+        stall_timeout_seconds=300,
+    )
+
+    subtask = Subtask(id="subtask-1", description="Task 1")
+    subtask.state = SubtaskState.running
+    subtask.agent = "agent-1"
+    # Recent activity - not stalled
+    subtask.last_activity_at = datetime.now(UTC)
+
+    run = Run.create("Build system")
+    run.subtasks = [subtask]
+    run.state = RunState.executing
+
+    agent_map = {"subtask-1": "agent-1"}
+    retried = await orchestrator._check_stalls(run, agent_map)
+
+    assert retried == 0
+    assert subtask.state == SubtaskState.running
+
+
+@pytest.mark.asyncio
+async def test_check_stalls_retries_stalled_subtask(mock_pool, mock_planner, mock_gates):
+    """Test _check_stalls retries a stalled subtask."""
+    from datetime import timedelta
+
+    orchestrator = Orchestrator(
+        pool=mock_pool,
+        planner=mock_planner,
+        gates=mock_gates,
+        runtime="claude",
+        stall_timeout_seconds=30,
+    )
+
+    subtask = Subtask(id="subtask-1", description="Task 1")
+    subtask.state = SubtaskState.running
+    subtask.agent = "agent-1"
+    # Old activity - stalled
+    subtask.last_activity_at = datetime.now(UTC) - timedelta(seconds=60)
+
+    run = Run.create("Build system")
+    run.subtasks = [subtask]
+    run.state = RunState.executing
+
+    agent_map = {"subtask-1": "agent-1"}
+    mock_pool.release = AsyncMock()
+
+    retried = await orchestrator._check_stalls(run, agent_map)
+
+    assert retried == 1
+    assert subtask.retry_count == 1
+    assert subtask.state == SubtaskState.pending
+    assert subtask.agent is None
+    assert subtask.last_activity_at is None
+    assert "subtask-1" not in agent_map
+    mock_pool.release.assert_called_once_with("agent-1")

@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 POLL_INTERVAL_SECONDS = 10
 SUBTASK_TIMEOUT_SECONDS = 600  # 10 minutes
+STALL_TIMEOUT_SECONDS = 300  # 5 minutes default
 
 
 class OrchestratorError(Exception):
@@ -40,6 +41,7 @@ class Orchestrator:
         merge_queue: MergeQueue | None = None,
         tracer: Tracer | None = None,
         memory: MemoryStore | None = None,
+        stall_timeout_seconds: int = STALL_TIMEOUT_SECONDS,
     ) -> None:
         self._pool = pool
         self._planner = planner
@@ -51,6 +53,7 @@ class Orchestrator:
         self._merge_queue = merge_queue
         self._tracer = tracer
         self._memory = memory
+        self._stall_timeout = stall_timeout_seconds
 
         self._handlers: dict[RunState, _Handler] = {
             RunState.planning: self._plan,
@@ -97,6 +100,45 @@ class Orchestrator:
             await self._memory.store_run_result(run, subtask_results)
         except Exception as exc:
             logger.warning("Failed to store run in memory: %s", exc)
+
+    async def _check_stalls(self, run: Run, agent_map: dict[str, str]) -> int:
+        """Check for stalled agents. Returns count of retried subtasks."""
+        retried = 0
+        now = datetime.now(UTC)
+
+        for subtask in run.subtasks:
+            if subtask.state != SubtaskState.running:
+                continue
+            if subtask.last_activity_at is None:
+                continue
+
+            elapsed = (now - subtask.last_activity_at).total_seconds()
+            if elapsed < self._stall_timeout:
+                continue
+
+            logger.warning("Subtask %s stalled (%.0fs since last activity)", subtask.id, elapsed)
+
+            agent_id = agent_map.get(subtask.id)
+            if agent_id:
+                try:
+                    await self._pool.release(agent_id)
+                except Exception:
+                    pass
+
+            if subtask.retry_count < subtask.max_retries:
+                subtask.retry_count += 1
+                subtask.state = SubtaskState.pending
+                subtask.agent = None
+                subtask.last_activity_at = None
+                if subtask.id in agent_map:
+                    del agent_map[subtask.id]
+                retried += 1
+                logger.info("Retrying subtask %s (attempt %d/%d)", subtask.id, subtask.retry_count, subtask.max_retries)
+            else:
+                subtask.state = SubtaskState.failed
+                logger.error("Subtask %s failed after %d retries", subtask.id, subtask.max_retries)
+
+        return retried
 
     async def _plan(self, run: Run) -> Run:
         """Decompose the task into subtasks via the Planner."""
@@ -150,6 +192,7 @@ class Orchestrator:
                     await self._pool.send_task(slot.id, subtask.description)
                     subtask.state = SubtaskState.running
                     subtask.agent = slot.id
+                    subtask.last_activity_at = datetime.now(UTC)
                     agent_map[subtask.id] = slot.id
                     active_count += 1
                 except Exception as exc:
@@ -192,9 +235,13 @@ class Orchestrator:
                     if result.diff:
                         subtask.result = result
                         subtask.state = SubtaskState.done
+                        subtask.last_activity_at = datetime.now(UTC)
                         active_count -= 1
                 except Exception:
                     pass
+
+            # Check for stalled agents and retry
+            await self._check_stalls(run, agent_map)
 
         # Any failures?
         if any(s.state == SubtaskState.failed for s in run.subtasks):

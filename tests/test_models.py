@@ -146,6 +146,28 @@ class TestSubtask:
         assert st.result.success is True
         assert st.state == SubtaskState.done
 
+    def test_retry_fields(self):
+        """Test Subtask has retry_count and last_activity_at fields."""
+        st = Subtask.create("Test task")
+        assert st.retry_count == 0
+        assert st.max_retries == 2
+        assert st.last_activity_at is None
+
+    def test_retry_fields_explicit(self):
+        """Test Subtask accepts explicit retry field values."""
+        from datetime import UTC, datetime
+        now = datetime.now(UTC)
+        st = Subtask(
+            id="st-1",
+            description="Test task",
+            retry_count=1,
+            max_retries=3,
+            last_activity_at=now,
+        )
+        assert st.retry_count == 1
+        assert st.max_retries == 3
+        assert st.last_activity_at == now
+
 
 class TestRun:
     def test_create_factory(self):
