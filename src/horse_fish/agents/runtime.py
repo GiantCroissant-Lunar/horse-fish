@@ -27,7 +27,7 @@ class ClaudeRuntime:
     """Adapter for the Claude Code CLI."""
 
     runtime_id: ClassVar[str] = "claude"
-    ready_pattern: ClassVar[str] = r"[❯>]\s*$"
+    ready_pattern: ClassVar[str] = r"^(❯\s|>\s)"
     ready_timeout_seconds: ClassVar[int] = 30
 
     def build_spawn_command(self, model: str) -> str:
@@ -44,8 +44,8 @@ class CopilotRuntime:
     """Adapter for the GitHub Copilot CLI."""
 
     runtime_id: ClassVar[str] = "copilot"
-    ready_pattern: ClassVar[str] = r"[>]\s*$"
-    ready_timeout_seconds: ClassVar[int] = 60
+    ready_pattern: ClassVar[str] = r"^(❯\s|>\s)"
+    ready_timeout_seconds: ClassVar[int] = 30
 
     def build_spawn_command(self, model: str) -> str:
         return f"copilot --model {shlex.quote(model)} --allow-all-tools"
@@ -59,16 +59,16 @@ class PiRuntime:
     """Adapter for the Pi CLI."""
 
     runtime_id: ClassVar[str] = "pi"
-    ready_pattern: ClassVar[str] = r"[>›]\s*$"
-    ready_timeout_seconds: ClassVar[int] = 30
+    ready_pattern: ClassVar[str] = r"^(>\s|›\s)"
+    ready_timeout_seconds: ClassVar[int] = 45
 
     def build_spawn_command(self, model: str) -> str:
         return f"pi --model {shlex.quote(model)}"
 
     def build_env(self) -> dict[str, str]:
-        key = os.environ.get("DASHSCOPE_API_KEY", "")
-        if key:
-            return {"DASHSCOPE_API_KEY": key}
+        api_key = os.environ.get("DASHSCOPE_API_KEY")
+        if api_key:
+            return {"DASHSCOPE_API_KEY": api_key}
         return {}
 
 
@@ -77,8 +77,8 @@ class OpenCodeRuntime:
     """Adapter for the OpenCode CLI."""
 
     runtime_id: ClassVar[str] = "opencode"
-    ready_pattern: ClassVar[str] = r"[>]\s*$"
-    ready_timeout_seconds: ClassVar[int] = 30
+    ready_pattern: ClassVar[str] = r"^(>\s|›\s)"
+    ready_timeout_seconds: ClassVar[int] = 45
 
     def build_spawn_command(self, model: str) -> str:
         return f"opencode -m {shlex.quote(model)}"
