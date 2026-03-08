@@ -8,6 +8,7 @@ domains:
   - architecture
   - e2e
   - planner
+  - memory
 governance:
   max_entries: 100
   warn_entries: 150
