@@ -58,6 +58,23 @@ MIGRATIONS: list[tuple[int, str]] = [
         );
         """,
     ),
+    (
+        2,
+        """
+        CREATE TABLE IF NOT EXISTS lessons (
+            id TEXT PRIMARY KEY,
+            run_id TEXT,
+            category TEXT NOT NULL,
+            pattern TEXT NOT NULL,
+            content TEXT NOT NULL,
+            task_signature TEXT,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_lessons_category ON lessons(category);
+        CREATE INDEX IF NOT EXISTS idx_lessons_pattern ON lessons(pattern);
+        """,
+    ),
 ]
 
 
