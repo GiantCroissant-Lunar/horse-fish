@@ -269,23 +269,32 @@ class WorktreeManager:
 
         return removed
 
-    async def get_diff(self, name: str) -> str:
-        """Get the diff of uncommitted changes in a worktree.
+    async def get_diff(self, name: str, base_branch: str = "main") -> str:
+        """Get the diff of all changes in a worktree (uncommitted + committed).
+
+        Checks both uncommitted changes and new commits on the branch vs base.
 
         Args:
             name: Name of the worktree.
+            base_branch: Branch to compare against for committed changes.
 
         Returns:
-            Diff string showing uncommitted changes (including untracked files).
+            Diff string showing all changes (uncommitted + committed ahead of base).
         """
         path = self.base_dir / name
         try:
-            # Stage untracked files temporarily to include them in diff
+            # First check for uncommitted changes
             await self._run_git("add", "-N", ".", cwd=path, check=False)
+            _, uncommitted, _ = await self._run_git("diff", "HEAD", cwd=path, check=False)
+            if uncommitted:
+                return uncommitted
 
-            # Get diff of all changes (tracked and untracked)
-            _, stdout, _ = await self._run_git("diff", "HEAD", cwd=path, check=False)
-            return stdout
+            # If no uncommitted changes, check for commits ahead of base branch
+            branch = f"horse-fish/{name}"
+            _, committed, _ = await self._run_git(
+                "diff", f"{base_branch}...{branch}", cwd=path, check=False
+            )
+            return committed
         except WorktreeError:
             return ""
 

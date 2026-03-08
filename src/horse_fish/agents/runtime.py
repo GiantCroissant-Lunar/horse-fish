@@ -8,6 +8,25 @@ from dataclasses import dataclass
 from typing import ClassVar, Protocol
 
 
+def _get_tmux_env(key: str) -> str | None:
+    """Read a variable from tmux global environment (fallback for non-exported keys)."""
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["tmux", "show-environment", "-g", key],
+            capture_output=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            line = result.stdout.decode().strip()
+            if "=" in line:
+                return line.split("=", 1)[1]
+    except Exception:
+        pass
+    return None
+
+
 class RuntimeAdapter(Protocol):
     """Protocol for agent runtime command builders."""
 
@@ -66,7 +85,7 @@ class PiRuntime:
         return f"pi --model {shlex.quote(model)}"
 
     def build_env(self) -> dict[str, str]:
-        api_key = os.environ.get("DASHSCOPE_API_KEY")
+        api_key = os.environ.get("DASHSCOPE_API_KEY") or _get_tmux_env("DASHSCOPE_API_KEY")
         if api_key:
             return {"DASHSCOPE_API_KEY": api_key}
         return {}
