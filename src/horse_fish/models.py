@@ -32,6 +32,12 @@ class RunState(StrEnum):
     failed = "failed"
 
 
+class TaskComplexity(StrEnum):
+    SOLO = "SOLO"  # 1 subtask max
+    TRIO = "TRIO"  # 3 subtasks max
+    SQUAD = "SQUAD"  # 8 subtasks max
+
+
 class AgentSlot(BaseModel):
     id: str
     name: str
