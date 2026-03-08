@@ -957,46 +957,37 @@ async def test_merge_falls_back_to_direct_without_queue(mock_pool, mock_planner,
     mock_pool._worktrees.merge.assert_called_once_with("hf-subtask-1")
 
 
-@pytest.fixture
-def mock_tracer():
-    """Mock Tracer."""
-    from horse_fish.observability.traces import RunTrace, Span, Tracer
+# --- Task 2: MemoryStore wiring tests ---
 
-    tracer = MagicMock(spec=Tracer)
-    trace = RunTrace(run_id="test", task="test task")
-    span = Span(name="test", trace=trace)
-    tracer.trace_run.return_value = trace
-    tracer.span.return_value = span
-    return tracer
+
+@pytest.fixture
+def mock_memory():
+    """Mock MemoryStore."""
+    memory = AsyncMock()
+    memory.store_run_result = AsyncMock()
+    memory.find_similar_tasks = AsyncMock(return_value=[])
+    return memory
 
 
 @pytest.mark.asyncio
-async def test_run_creates_trace_and_spans(mock_pool, mock_planner, mock_gates, mock_tracer):
-    """Test run() creates a trace and spans for each phase."""
+async def test_run_stores_result_in_memory_on_completion(mock_pool, mock_planner, mock_gates, mock_memory):
+    """Test run() stores result in memory when completed."""
     mock_planner.decompose.return_value = [
         Subtask(id="subtask-1", description="Task 1"),
     ]
     slot = AgentSlot(
-        id="agent-1",
-        name="hf-subtask-1",
-        runtime="claude",
-        model="claude-sonnet-4.6",
-        capability="builder",
-        state=AgentState.busy,
-        worktree_path="/tmp/wt",
+        id="agent-1", name="hf-subtask-1", runtime="claude",
+        model="claude-sonnet-4.6", capability="builder",
+        state=AgentState.busy, worktree_path="/tmp/wt",
     )
     mock_pool.spawn.return_value = slot
     mock_pool.send_task = AsyncMock()
     mock_pool.check_status = AsyncMock(return_value=AgentState.dead)
-    mock_pool.collect_result = AsyncMock(
-        return_value=SubtaskResult(
-            subtask_id="subtask-1",
-            success=True,
-            output="Done",
-            diff="commit",
-            duration_seconds=10.0,
-        )
+    result_obj = SubtaskResult(
+        subtask_id="subtask-1", success=True, output="Done",
+        diff="commit", duration_seconds=10.0,
     )
+    mock_pool.collect_result = AsyncMock(return_value=result_obj)
     mock_pool._get_slot.return_value = slot
     mock_gates.run_all = AsyncMock(
         return_value=[GateResult(gate="compile", passed=True, output="ok", duration_seconds=1.0)]
@@ -1004,11 +995,8 @@ async def test_run_creates_trace_and_spans(mock_pool, mock_planner, mock_gates, 
     mock_pool._worktrees.merge = AsyncMock(return_value=True)
 
     orchestrator = Orchestrator(
-        pool=mock_pool,
-        planner=mock_planner,
-        gates=mock_gates,
-        runtime="claude",
-        tracer=mock_tracer,
+        pool=mock_pool, planner=mock_planner, gates=mock_gates,
+        runtime="claude", memory=mock_memory,
     )
 
     async def mock_sleep(seconds):
@@ -1016,29 +1004,25 @@ async def test_run_creates_trace_and_spans(mock_pool, mock_planner, mock_gates, 
 
     with pytest.MonkeyPatch().context() as m:
         m.setattr("horse_fish.orchestrator.engine.asyncio.sleep", mock_sleep)
-        result = await orchestrator.run("Build system")
+        run = await orchestrator.run("Build system")
 
-    assert result.state == RunState.completed
-    mock_tracer.trace_run.assert_called_once()
-    # Should have spans for plan, execute, review, merge
-    assert mock_tracer.span.call_count == 4
-    assert mock_tracer.end_span.call_count == 4
-    mock_tracer.end_trace.assert_called_once_with(mock_tracer.trace_run.return_value, "completed")
+    assert run.state == RunState.completed
+    mock_memory.store_run_result.assert_called_once()
+    call_args = mock_memory.store_run_result.call_args
+    assert call_args[0][0].id == run.id  # first arg is the Run
+    assert len(call_args[0][1]) == 1  # second arg is subtask_results list
 
 
 @pytest.mark.asyncio
-async def test_run_ends_trace_on_failure(mock_pool, mock_planner, mock_gates, mock_tracer):
-    """Test run() ends trace with 'failed' on failure."""
+async def test_run_does_not_store_memory_on_failure(mock_pool, mock_planner, mock_gates, mock_memory):
+    """Test run() does NOT store in memory when failed."""
     mock_planner.decompose.side_effect = Exception("LLM error")
 
     orchestrator = Orchestrator(
-        pool=mock_pool,
-        planner=mock_planner,
-        gates=mock_gates,
-        runtime="claude",
-        tracer=mock_tracer,
+        pool=mock_pool, planner=mock_planner, gates=mock_gates,
+        runtime="claude", memory=mock_memory,
     )
-    result = await orchestrator.run("Build system")
+    run = await orchestrator.run("Build system")
 
-    assert result.state == RunState.failed
-    mock_tracer.end_trace.assert_called_once_with(mock_tracer.trace_run.return_value, "failed")
+    assert run.state == RunState.failed
+    mock_memory.store_run_result.assert_not_called()
