@@ -54,7 +54,7 @@ def sample_subtasks():
     """Sample subtasks for testing."""
     return [
         Subtask(id="subtask-1", description="Implement user model"),
-        Subtask(id="subtask-2", description="Create API endpoints", deps=["Implement user model"]),
+        Subtask(id="subtask-2", description="Create API endpoints", deps=["subtask-1"]),
     ]
 
 
@@ -160,7 +160,7 @@ async def test_execute_respects_dag_deps(orchestrator, mock_pool):
     """Test _execute respects DAG deps (blocked subtasks wait)."""
     # Create subtasks where subtask-2 depends on subtask-1
     subtask1 = Subtask(id="subtask-1", description="Implement base")
-    subtask2 = Subtask(id="subtask-2", description="Build on base", deps=["Implement base"])
+    subtask2 = Subtask(id="subtask-2", description="Build on base", deps=["subtask-1"])
     run = Run.create("Build system")
     run.subtasks = [subtask1, subtask2]
     run.state = RunState.executing
@@ -700,7 +700,7 @@ def test_deps_met_all_done():
     run = Run.create("Task")
     run.subtasks = [
         Subtask(id="s1", description="Task 1", state=SubtaskState.done),
-        Subtask(id="s2", description="Task 2", deps=["Task 1"]),
+        Subtask(id="s2", description="Task 2", deps=["s1"]),
     ]
     assert Orchestrator._deps_met(run, run.subtasks[1]) is True
 
@@ -710,7 +710,7 @@ def test_deps_met_not_done():
     run = Run.create("Task")
     run.subtasks = [
         Subtask(id="s1", description="Task 1", state=SubtaskState.pending),
-        Subtask(id="s2", description="Task 2", deps=["Task 1"]),
+        Subtask(id="s2", description="Task 2", deps=["s1"]),
     ]
     assert Orchestrator._deps_met(run, run.subtasks[1]) is False
 
@@ -721,9 +721,49 @@ def test_deps_met_partial():
     run.subtasks = [
         Subtask(id="s1", description="Task 1", state=SubtaskState.done),
         Subtask(id="s2", description="Task 2", state=SubtaskState.pending),
-        Subtask(id="s3", description="Task 3", deps=["Task 1", "Task 2"]),
+        Subtask(id="s3", description="Task 3", deps=["s1", "s2"]),
     ]
     assert Orchestrator._deps_met(run, run.subtasks[2]) is False
+
+
+def test_deps_met_by_id():
+    """Test _deps_met works with ID-based dependencies."""
+    run = Run.create("Task")
+    run.subtasks = [
+        Subtask(id="s1", description="Task 1", state=SubtaskState.done),
+        Subtask(id="s2", description="Task 2", state=SubtaskState.done),
+        Subtask(id="s3", description="Task 3", deps=["s1", "s2"]),
+    ]
+    assert Orchestrator._deps_met(run, run.subtasks[2]) is True
+
+
+def test_resolve_deps_converts_descriptions_to_ids():
+    """Test _resolve_deps converts description-based deps to ID-based deps."""
+    from horse_fish.orchestrator.engine import Orchestrator
+
+    subtasks = [
+        Subtask(id="subtask-1", description="Implement user model"),
+        Subtask(id="subtask-2", description="Create API endpoints", deps=["subtask-1"]),
+        Subtask(id="subtask-3", description="Add tests", deps=["Implement user model", "Create API endpoints"]),
+    ]
+    result = Orchestrator._resolve_deps(subtasks)
+
+    assert result[0].deps == []
+    assert result[1].deps == ["subtask-1"]
+    assert result[2].deps == ["subtask-1", "subtask-2"]
+
+
+def test_resolve_deps_keeps_unknown_deps():
+    """Test _resolve_deps keeps unknown deps as-is."""
+    from horse_fish.orchestrator.engine import Orchestrator
+
+    subtasks = [
+        Subtask(id="subtask-1", description="Task 1"),
+        Subtask(id="subtask-2", description="Task 2", deps=["subtask-1", "unknown-dep"]),
+    ]
+    result = Orchestrator._resolve_deps(subtasks)
+
+    assert result[1].deps == ["subtask-1", "unknown-dep"]
 
 
 @pytest.mark.asyncio
@@ -881,9 +921,9 @@ async def test_merge_uses_queue_when_provided(mock_pool, mock_planner, mock_gate
 
     mock_merge_queue = AsyncMock(spec=MergeQueue)
     mock_merge_queue.enqueue = AsyncMock()
-    mock_merge_queue.process = AsyncMock(return_value=[
-        MagicMock(subtask_id="subtask-1", success=True, conflict_files=[])
-    ])
+    mock_merge_queue.process = AsyncMock(
+        return_value=[MagicMock(subtask_id="subtask-1", success=True, conflict_files=[])]
+    )
 
     orchestrator = Orchestrator(
         pool=mock_pool,
@@ -977,16 +1017,23 @@ async def test_run_stores_result_in_memory_on_completion(mock_pool, mock_planner
         Subtask(id="subtask-1", description="Task 1"),
     ]
     slot = AgentSlot(
-        id="agent-1", name="hf-subtask-1", runtime="claude",
-        model="claude-sonnet-4.6", capability="builder",
-        state=AgentState.busy, worktree_path="/tmp/wt",
+        id="agent-1",
+        name="hf-subtask-1",
+        runtime="claude",
+        model="claude-sonnet-4.6",
+        capability="builder",
+        state=AgentState.busy,
+        worktree_path="/tmp/wt",
     )
     mock_pool.spawn.return_value = slot
     mock_pool.send_task = AsyncMock()
     mock_pool.check_status = AsyncMock(return_value=AgentState.dead)
     result_obj = SubtaskResult(
-        subtask_id="subtask-1", success=True, output="Done",
-        diff="commit", duration_seconds=10.0,
+        subtask_id="subtask-1",
+        success=True,
+        output="Done",
+        diff="commit",
+        duration_seconds=10.0,
     )
     mock_pool.collect_result = AsyncMock(return_value=result_obj)
     mock_pool._get_slot.return_value = slot
@@ -996,8 +1043,11 @@ async def test_run_stores_result_in_memory_on_completion(mock_pool, mock_planner
     mock_pool._worktrees.merge = AsyncMock(return_value=True)
 
     orchestrator = Orchestrator(
-        pool=mock_pool, planner=mock_planner, gates=mock_gates,
-        runtime="claude", memory=mock_memory,
+        pool=mock_pool,
+        planner=mock_planner,
+        gates=mock_gates,
+        runtime="claude",
+        memory=mock_memory,
     )
 
     async def mock_sleep(seconds):
@@ -1020,8 +1070,11 @@ async def test_run_does_not_store_memory_on_failure(mock_pool, mock_planner, moc
     mock_planner.decompose.side_effect = Exception("LLM error")
 
     orchestrator = Orchestrator(
-        pool=mock_pool, planner=mock_planner, gates=mock_gates,
-        runtime="claude", memory=mock_memory,
+        pool=mock_pool,
+        planner=mock_planner,
+        gates=mock_gates,
+        runtime="claude",
+        memory=mock_memory,
     )
     run = await orchestrator.run("Build system")
 
@@ -1126,8 +1179,12 @@ async def test_execute_detects_stalled_agent_and_retries(mock_pool, mock_planner
 
     # Mock spawn for retry
     slot = AgentSlot(
-        id="agent-2", name="hf-retry", runtime="claude",
-        model="claude-sonnet-4.6", capability="builder", state=AgentState.busy,
+        id="agent-2",
+        name="hf-retry",
+        runtime="claude",
+        model="claude-sonnet-4.6",
+        capability="builder",
+        state=AgentState.busy,
     )
     mock_pool.spawn.return_value = slot
     mock_pool.send_task = AsyncMock()
@@ -1156,7 +1213,7 @@ async def test_execute_detects_stalled_agent_and_retries(mock_pool, mock_planner
 
     with pytest.MonkeyPatch().context() as m:
         m.setattr("horse_fish.orchestrator.engine.asyncio.sleep", mock_sleep)
-        result = await orchestrator._execute(run)
+        await orchestrator._execute(run)
 
     assert subtask.retry_count >= 1
     mock_pool.release.assert_called()
@@ -1186,9 +1243,7 @@ async def test_execute_fails_after_max_retries(mock_pool, mock_planner, mock_gat
 
     mock_pool.check_status = AsyncMock(return_value=AgentState.busy)
     mock_pool.collect_result = AsyncMock(
-        return_value=SubtaskResult(
-            subtask_id="subtask-1", success=False, output="", diff="", duration_seconds=0
-        )
+        return_value=SubtaskResult(subtask_id="subtask-1", success=False, output="", diff="", duration_seconds=0)
     )
     mock_pool.release = AsyncMock()
 

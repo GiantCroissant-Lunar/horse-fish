@@ -10,7 +10,7 @@ from horse_fish.agents.pool import AgentPool
 from horse_fish.dispatch.selector import AgentSelector
 from horse_fish.memory.store import MemoryStore
 from horse_fish.merge.queue import MergeQueue
-from horse_fish.models import AgentState, Run, RunState, SubtaskResult, SubtaskState
+from horse_fish.models import AgentState, Run, RunState, Subtask, SubtaskResult, SubtaskState
 from horse_fish.observability.traces import Tracer
 from horse_fish.planner.decompose import Planner
 from horse_fish.validation.gates import ValidationGates
@@ -167,6 +167,9 @@ class Orchestrator:
             logger.error("Planner returned no subtasks")
             run.state = RunState.failed
             return run
+
+        # Convert description-based deps to ID-based deps
+        subtasks = self._resolve_deps(subtasks)
 
         run.subtasks = subtasks
         run.state = RunState.executing
@@ -337,8 +340,21 @@ class Orchestrator:
         """Check if all dependencies of a subtask are done."""
         if not subtask.deps:
             return True
-        done_descriptions = {s.description for s in run.subtasks if s.state == SubtaskState.done}
-        return all(dep in done_descriptions for dep in subtask.deps)
+        done_ids = {s.id for s in run.subtasks if s.state == SubtaskState.done}
+        return all(dep in done_ids for dep in subtask.deps)
+
+    @staticmethod
+    def _resolve_deps(subtasks: list[Subtask]) -> list[Subtask]:
+        """Convert description-based deps to ID-based deps.
+
+        Builds a mapping from description to ID, then replaces each dep
+        with the corresponding ID if found. Unknown deps are kept as-is.
+        """
+        desc_to_id: dict[str, str] = {s.description: s.id for s in subtasks}
+        for subtask in subtasks:
+            if subtask.deps:
+                subtask.deps = [desc_to_id.get(dep, dep) for dep in subtask.deps]
+        return subtasks
 
 
 _Handler = type(Orchestrator._plan)  # just for type alias readability
