@@ -1,0 +1,136 @@
+"""Tests for CLI commands."""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from click.testing import CliRunner
+
+from horse_fish.cli import main
+from horse_fish.models import Run, RunState, Subtask, SubtaskState
+
+
+@pytest.fixture
+def runner():
+    return CliRunner()
+
+
+@pytest.fixture
+def mock_run():
+    run = Run.create("test task")
+    run.state = RunState.completed
+    run.subtasks = [
+        Subtask(id="1", description="Subtask 1", state=SubtaskState.done),
+        Subtask(id="2", description="Subtask 2", state=SubtaskState.done),
+    ]
+    return run
+
+
+def test_version(runner):
+    """Test that --version prints version."""
+    result = runner.invoke(main, ["--version"])
+    assert result.exit_code == 0
+    assert "0.1.0" in result.output
+
+
+@patch("horse_fish.cli._init_components")
+def test_run_command(mock_init_components, runner, mock_run):
+    """Test 'hf run' invokes orchestrator and prints result."""
+    mock_orchestrator = MagicMock()
+    mock_orchestrator.run = AsyncMock(return_value=mock_run)
+    mock_store = MagicMock()
+    mock_store.close = MagicMock()
+    mock_pool = MagicMock()
+    mock_init_components.return_value = (mock_orchestrator, mock_store, mock_pool)
+
+    result = runner.invoke(main, ["run", "test task"])
+
+    assert result.exit_code == 0
+    assert f"Run {mock_run.id}: completed" in result.output
+    assert "[done] Subtask 1" in result.output
+    assert "[done] Subtask 2" in result.output
+    mock_orchestrator.run.assert_called_once_with("test task")
+    mock_store.close.assert_called_once()
+
+
+@patch("horse_fish.cli.Store")
+def test_status_no_agents(mock_store_class, runner):
+    """Test 'hf status' with no agents."""
+    mock_store = MagicMock()
+    mock_store.fetchall.return_value = []
+    mock_store_class.return_value = mock_store
+
+    result = runner.invoke(main, ["status"])
+
+    assert result.exit_code == 0
+    assert "No active agents" in result.output
+    mock_store.migrate.assert_called_once()
+    mock_store.close.assert_called_once()
+
+
+@patch("horse_fish.cli.Store")
+def test_status_with_agents(mock_store_class, runner):
+    """Test 'hf status' with agents prints table."""
+    mock_store = MagicMock()
+    mock_store.fetchall.return_value = [
+        {"id": "1", "name": "agent-1", "runtime": "claude", "state": "idle", "task_id": "task-1"},
+        {"id": "2", "name": "agent-2", "runtime": "pi", "state": "busy", "task_id": None},
+    ]
+    mock_store_class.return_value = mock_store
+
+    result = runner.invoke(main, ["status"])
+
+    assert result.exit_code == 0
+    assert "Name" in result.output
+    assert "Runtime" in result.output
+    assert "State" in result.output
+    assert "agent-1" in result.output
+    assert "agent-2" in result.output
+    assert "claude" in result.output
+    assert "task-1" in result.output
+    mock_store.migrate.assert_called_once()
+    mock_store.close.assert_called_once()
+
+
+@patch("horse_fish.cli.AgentPool")
+@patch("horse_fish.cli.TmuxManager")
+@patch("horse_fish.cli.WorktreeManager")
+@patch("horse_fish.cli.Store")
+@patch("pathlib.Path.cwd")
+def test_clean_command(mock_cwd, mock_store_class, _mock_worktrees, _mock_tmux, mock_pool_class, runner):
+    """Test 'hf clean' calls pool.cleanup() and prints count."""
+    mock_cwd.return_value = "/repo"
+    mock_store = MagicMock()
+    mock_store_class.return_value = mock_store
+    mock_pool = MagicMock()
+    mock_pool.cleanup = AsyncMock(return_value=3)
+    mock_pool_class.return_value = mock_pool
+
+    result = runner.invoke(main, ["clean"])
+
+    assert result.exit_code == 0
+    assert "Released 3 agents" in result.output
+    mock_pool.cleanup.assert_called_once()
+    mock_store.migrate.assert_called_once()
+    mock_store.close.assert_called_once()
+
+
+@patch("horse_fish.cli._init_components")
+def test_run_with_options(mock_init_components, runner, mock_run):
+    """Test 'hf run' with custom options."""
+    mock_orchestrator = MagicMock()
+    mock_orchestrator.run = AsyncMock(return_value=mock_run)
+    mock_store = MagicMock()
+    mock_store.close = MagicMock()
+    mock_pool = MagicMock()
+    mock_init_components.return_value = (mock_orchestrator, mock_store, mock_pool)
+
+    result = runner.invoke(
+        main,
+        ["run", "custom task", "--runtime", "pi", "--model", "custom-model", "--max-agents", "5"],
+    )
+
+    assert result.exit_code == 0
+    mock_init_components.assert_called_once_with("pi", "custom-model", 5)
+    mock_orchestrator.run.assert_called_once_with("custom task")
