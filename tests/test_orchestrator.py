@@ -723,3 +723,235 @@ def test_deps_met_partial():
         Subtask(id="s3", description="Task 3", deps=["Task 1", "Task 2"]),
     ]
     assert Orchestrator._deps_met(run, run.subtasks[2]) is False
+
+
+@pytest.mark.asyncio
+async def test_execute_uses_agent_selector_when_provided(mock_pool, mock_planner, mock_gates):
+    """Test _execute uses AgentSelector when provided."""
+    from horse_fish.dispatch.selector import AgentSelector
+
+    # Create a mock selector
+    mock_selector = AsyncMock(spec=AgentSelector)
+    idle_agent = AgentSlot(
+        id="idle-agent-1",
+        name="hf-existing",
+        runtime="claude",
+        model="claude-sonnet-4.6",
+        capability="builder",
+        state=AgentState.idle,
+    )
+    mock_pool.list_agents = MagicMock(return_value=[idle_agent])  # sync method
+    mock_selector.select.return_value = idle_agent
+
+    orchestrator = Orchestrator(
+        pool=mock_pool,
+        planner=mock_planner,
+        gates=mock_gates,
+        runtime="claude",
+        model="claude-sonnet-4.6",
+        max_agents=3,
+        selector=mock_selector,
+    )
+
+    subtask = Subtask(id="subtask-1", description="Task 1")
+    run = Run.create("Build system")
+    run.subtasks = [subtask]
+    run.state = RunState.executing
+
+    mock_pool.send_task = AsyncMock()
+    mock_pool.check_status = AsyncMock(return_value=AgentState.dead)
+    mock_pool.collect_result = AsyncMock(
+        return_value=SubtaskResult(
+            subtask_id="subtask-1",
+            success=True,
+            output="Done",
+            diff="commit",
+            duration_seconds=10.0,
+        )
+    )
+
+    async def mock_sleep(seconds):
+        return None
+
+    with pytest.MonkeyPatch().context() as m:
+        m.setattr("horse_fish.orchestrator.engine.asyncio.sleep", mock_sleep)
+        result = await orchestrator._execute(run)
+
+    assert result.state == RunState.reviewing
+    assert subtask.state == SubtaskState.done
+    # Verify selector.select was called
+    mock_selector.select.assert_called_once()
+    # Verify spawn was NOT called (selector returned existing agent)
+    mock_pool.spawn.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_execute_falls_back_to_round_robin_without_selector(mock_pool, mock_planner, mock_gates):
+    """Test _execute falls back to round-robin spawn without selector."""
+    orchestrator = Orchestrator(
+        pool=mock_pool,
+        planner=mock_planner,
+        gates=mock_gates,
+        runtime="claude",
+        model="claude-sonnet-4.6",
+        max_agents=3,
+        selector=None,  # No selector
+    )
+
+    subtask = Subtask(id="subtask-1", description="Task 1")
+    run = Run.create("Build system")
+    run.subtasks = [subtask]
+    run.state = RunState.executing
+
+    slot = AgentSlot(
+        id="agent-1",
+        name="hf-subtask-1",
+        runtime="claude",
+        model="claude-sonnet-4.6",
+        capability="builder",
+        state=AgentState.busy,
+    )
+    mock_pool.spawn.return_value = slot
+    mock_pool.send_task = AsyncMock()
+    mock_pool.check_status = AsyncMock(return_value=AgentState.dead)
+    mock_pool.collect_result = AsyncMock(
+        return_value=SubtaskResult(
+            subtask_id="subtask-1",
+            success=True,
+            output="Done",
+            diff="commit",
+            duration_seconds=10.0,
+        )
+    )
+
+    async def mock_sleep(seconds):
+        return None
+
+    with pytest.MonkeyPatch().context() as m:
+        m.setattr("horse_fish.orchestrator.engine.asyncio.sleep", mock_sleep)
+        result = await orchestrator._execute(run)
+
+    assert result.state == RunState.reviewing
+    assert subtask.state == SubtaskState.done
+    # Verify spawn WAS called (round-robin fallback)
+    mock_pool.spawn.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_selector_returns_none_skips_dispatch(mock_pool, mock_planner, mock_gates):
+    """Test _execute skips subtask when selector returns None."""
+    from horse_fish.dispatch.selector import AgentSelector
+
+    mock_selector = AsyncMock(spec=AgentSelector)
+    mock_selector.select.return_value = None  # No suitable agent
+    mock_pool.list_agents.return_value = []  # No idle agents
+
+    orchestrator = Orchestrator(
+        pool=mock_pool,
+        planner=mock_planner,
+        gates=mock_gates,
+        runtime="claude",
+        model="claude-sonnet-4.6",
+        max_agents=3,
+        selector=mock_selector,
+    )
+
+    # Create subtask with unmet deps so it won't be dispatched
+    subtask = Subtask(id="subtask-1", description="Task 1", deps=["nonexistent"])
+    run = Run.create("Build system")
+    run.subtasks = [subtask]
+    run.state = RunState.executing
+
+    async def mock_sleep(seconds):
+        return None
+
+    with pytest.MonkeyPatch().context() as m:
+        m.setattr("horse_fish.orchestrator.engine.asyncio.sleep", mock_sleep)
+        result = await orchestrator._execute(run)
+
+    # Should fail due to deadlock (no subtasks can be dispatched)
+    assert result.state == RunState.failed
+
+
+@pytest.mark.asyncio
+async def test_merge_uses_queue_when_provided(mock_pool, mock_planner, mock_gates):
+    """Test _merge uses MergeQueue when provided."""
+    from horse_fish.merge.queue import MergeQueue
+
+    mock_merge_queue = AsyncMock(spec=MergeQueue)
+    mock_merge_queue.enqueue = AsyncMock()
+    mock_merge_queue.process = AsyncMock(return_value=[
+        MagicMock(subtask_id="subtask-1", success=True, conflict_files=[])
+    ])
+
+    orchestrator = Orchestrator(
+        pool=mock_pool,
+        planner=mock_planner,
+        gates=mock_gates,
+        runtime="claude",
+        model="claude-sonnet-4.6",
+        max_agents=3,
+        merge_queue=mock_merge_queue,
+    )
+
+    subtask = Subtask(id="subtask-1", description="Task 1", state=SubtaskState.done, agent="agent-1")
+    run = Run.create("Build system")
+    run.subtasks = [subtask]
+    run.state = RunState.merging
+
+    slot = AgentSlot(
+        id="agent-1",
+        name="hf-subtask-1",
+        runtime="claude",
+        model="claude-sonnet-4.6",
+        capability="builder",
+        state=AgentState.busy,
+        worktree_path="/tmp/worktree",
+        branch="overstory/hf-subtask-1",
+    )
+    mock_pool._get_slot.return_value = slot
+
+    result = await orchestrator._merge(run)
+
+    assert result.state == RunState.completed
+    mock_merge_queue.enqueue.assert_called_once()
+    mock_merge_queue.process.assert_called_once()
+    # Direct merge should NOT be called when using queue
+    mock_pool._worktrees.merge.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_merge_falls_back_to_direct_without_queue(mock_pool, mock_planner, mock_gates):
+    """Test _merge falls back to direct merge without queue."""
+    orchestrator = Orchestrator(
+        pool=mock_pool,
+        planner=mock_planner,
+        gates=mock_gates,
+        runtime="claude",
+        model="claude-sonnet-4.6",
+        max_agents=3,
+        merge_queue=None,  # No queue
+    )
+
+    subtask = Subtask(id="subtask-1", description="Task 1", state=SubtaskState.done, agent="agent-1")
+    run = Run.create("Build system")
+    run.subtasks = [subtask]
+    run.state = RunState.merging
+
+    slot = AgentSlot(
+        id="agent-1",
+        name="hf-subtask-1",
+        runtime="claude",
+        model="claude-sonnet-4.6",
+        capability="builder",
+        state=AgentState.busy,
+        worktree_path="/tmp/worktree",
+        branch="overstory/hf-subtask-1",
+    )
+    mock_pool._get_slot.return_value = slot
+    mock_pool._worktrees.merge = AsyncMock(return_value=True)
+
+    result = await orchestrator._merge(run)
+
+    assert result.state == RunState.completed
+    mock_pool._worktrees.merge.assert_called_once_with("hf-subtask-1")

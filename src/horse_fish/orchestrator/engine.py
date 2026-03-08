@@ -7,7 +7,9 @@ import logging
 from datetime import UTC, datetime
 
 from horse_fish.agents.pool import AgentPool
-from horse_fish.models import Run, RunState, SubtaskState
+from horse_fish.dispatch.selector import AgentSelector
+from horse_fish.merge.queue import MergeQueue
+from horse_fish.models import AgentState, Run, RunState, SubtaskState
 from horse_fish.planner.decompose import Planner
 from horse_fish.validation.gates import ValidationGates
 
@@ -32,6 +34,8 @@ class Orchestrator:
         runtime: str = "claude",
         model: str | None = None,
         max_agents: int = 3,
+        selector: AgentSelector | None = None,
+        merge_queue: MergeQueue | None = None,
     ) -> None:
         self._pool = pool
         self._planner = planner
@@ -39,6 +43,8 @@ class Orchestrator:
         self._runtime = runtime
         self._model = model or ""
         self._max_agents = max_agents
+        self._selector = selector
+        self._merge_queue = merge_queue
 
         self._handlers: dict[RunState, _Handler] = {
             RunState.planning: self._plan,
@@ -96,12 +102,21 @@ class Orchestrator:
                     continue
 
                 try:
-                    slot = await self._pool.spawn(
-                        name=f"hf-{subtask.id[:8]}",
-                        runtime=self._runtime,
-                        model=self._model,
-                        capability="builder",
-                    )
+                    # Use selector if available, otherwise spawn directly
+                    if self._selector:
+                        available_agents = [a for a in self._pool.list_agents() if a.state == AgentState.idle]
+                        selected = self._selector.select(subtask, available_agents)
+                        if selected is None:
+                            # Selector returned None — skip this subtask for now
+                            continue
+                        slot = selected
+                    else:
+                        slot = await self._pool.spawn(
+                            name=f"hf-{subtask.id[:8]}",
+                            runtime=self._runtime,
+                            model=self._model,
+                            capability="builder",
+                        )
                     await self._pool.send_task(slot.id, subtask.description)
                     subtask.state = SubtaskState.running
                     subtask.agent = slot.id
@@ -186,23 +201,39 @@ class Orchestrator:
 
     async def _merge(self, run: Run) -> Run:
         """Merge each subtask's worktree branch into main."""
-        for subtask in run.subtasks:
-            if subtask.state != SubtaskState.done or not subtask.agent:
-                continue
-
-            try:
+        if self._merge_queue:
+            # Use merge queue: enqueue all subtasks, then process
+            for subtask in run.subtasks:
+                if subtask.state != SubtaskState.done or not subtask.agent:
+                    continue
                 slot = self._pool._get_slot(subtask.agent)
-                success = await self._pool._worktrees.merge(slot.name)
-                if not success:
-                    logger.error("Merge conflict for subtask %s", subtask.id)
+                await self._merge_queue.enqueue(subtask.id, slot.name, slot.branch)
+
+            results = await self._merge_queue.process()
+            for result in results:
+                if not result.success:
+                    logger.error("Merge conflict for subtask %s", result.subtask_id)
+                    run.state = RunState.failed
+                    return run
+        else:
+            # Fallback: direct merge without queue
+            for subtask in run.subtasks:
+                if subtask.state != SubtaskState.done or not subtask.agent:
+                    continue
+
+                try:
+                    slot = self._pool._get_slot(subtask.agent)
+                    success = await self._pool._worktrees.merge(slot.name)
+                    if not success:
+                        logger.error("Merge conflict for subtask %s", subtask.id)
+                        subtask.state = SubtaskState.failed
+                        run.state = RunState.failed
+                        return run
+                except Exception as exc:
+                    logger.error("Merge failed for subtask %s: %s", subtask.id, exc)
                     subtask.state = SubtaskState.failed
                     run.state = RunState.failed
                     return run
-            except Exception as exc:
-                logger.error("Merge failed for subtask %s: %s", subtask.id, exc)
-                subtask.state = SubtaskState.failed
-                run.state = RunState.failed
-                return run
 
         run.state = RunState.completed
         return run
