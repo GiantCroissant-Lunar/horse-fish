@@ -1,7 +1,6 @@
 version: '1'
 domains:
-  - agents
-  - testing
+  - models
 governance:
   max_entries: 100
   warn_entries: 150
