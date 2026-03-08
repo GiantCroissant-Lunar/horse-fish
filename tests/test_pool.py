@@ -176,7 +176,9 @@ async def test_send_task_sends_keys_and_marks_agent_busy() -> None:
 
     await pool.send_task(slot.id, "implement feature X")
 
-    tmux.send_keys.assert_awaited_once_with("hf-agent-1", "implement feature X")
+    tmux.send_keys.assert_awaited_once()
+    sent_prompt = tmux.send_keys.call_args[0][1]
+    assert "implement feature X" in sent_prompt
     agents = pool.list_agents()
     assert agents[0].state == AgentState.busy
 
@@ -186,6 +188,31 @@ async def test_send_task_raises_for_missing_agent() -> None:
     pool = make_pool(make_store(), MagicMock(), MagicMock())
     with pytest.raises(KeyError, match="not found"):
         await pool.send_task("no-such-id", "prompt")
+
+
+@pytest.mark.asyncio
+async def test_send_task_wraps_prompt_with_context() -> None:
+    store = make_store()
+    tmux = MagicMock()
+    tmux.spawn = AsyncMock(return_value=9)
+    tmux.send_keys = AsyncMock()
+    worktrees = MagicMock()
+    worktrees.create = AsyncMock(return_value=make_worktree_info())
+
+    pool = AgentPool(
+        store=store,
+        tmux=tmux,
+        worktrees=worktrees,
+        project_context="Use ruff.",
+    )
+    slot = await pool.spawn("agent-1", "copilot", "gpt-5.4", "builder")
+
+    await pool.send_task(slot.id, "implement feature X")
+
+    tmux.send_keys.assert_awaited_once()
+    sent_prompt = tmux.send_keys.call_args[0][1]
+    assert "implement feature X" in sent_prompt
+    assert "Use ruff." in sent_prompt
 
 
 # ---------------------------------------------------------------------------
@@ -318,7 +345,6 @@ async def test_list_agents_returns_all_slots() -> None:
     tmux.kill_session = AsyncMock()
     worktrees = MagicMock()
     worktrees.create = AsyncMock(side_effect=[make_worktree_info("agent-1"), make_worktree_info("agent-2")])
-    worktrees.remove = AsyncMock()
 
     pool = make_pool(store, tmux, worktrees)
     await pool.spawn("agent-1", "claude", "model", "builder")
