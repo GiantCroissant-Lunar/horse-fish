@@ -11,6 +11,7 @@ from horse_fish.agents.pool import AgentPool
 from horse_fish.agents.tmux import TmuxManager
 from horse_fish.agents.worktree import WorktreeManager
 from horse_fish.merge.queue import MergeQueue
+from horse_fish.observability.traces import Tracer
 from horse_fish.orchestrator.engine import Orchestrator
 from horse_fish.planner.decompose import Planner
 from horse_fish.store.db import Store
@@ -29,8 +30,10 @@ def _init_components(runtime: str, model: str | None, max_agents: int):
     pool = AgentPool(store, tmux, worktrees)
     planner = Planner(runtime=runtime, model=model)
     gates = ValidationGates()
+    tracer = Tracer()
     orchestrator = Orchestrator(
-        pool=pool, planner=planner, gates=gates, runtime=runtime, model=model or "", max_agents=max_agents
+        pool=pool, planner=planner, gates=gates, runtime=runtime, model=model or "", max_agents=max_agents,
+        tracer=tracer,
     )
     return orchestrator, store, pool
 
@@ -113,9 +116,12 @@ def merge(run_id: str | None, dry_run: bool, force: bool):
             click.echo(f"{'Subtask':<20} {'Agent':<20} {'Branch':<30} {'Priority':<10} {'Created'}")
             click.echo("-" * 100)
             for entry in pending:
-                click.echo(
-                    f"{entry['subtask_id']:<20} {entry['agent_name']:<20} {entry['branch']:<30} {entry['priority']:<10} {entry['created_at']}"
-                )
+                sid = entry["subtask_id"]
+                aname = entry["agent_name"]
+                branch = entry["branch"]
+                prio = entry["priority"]
+                created = entry["created_at"]
+                click.echo(f"{sid:<20} {aname:<20} {branch:<30} {prio:<10} {created}")
         else:
             results = asyncio.run(merge_queue.process())
             if not results:

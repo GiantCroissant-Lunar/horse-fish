@@ -183,8 +183,10 @@ def test_merge_dry_run_shows_pending(mock_store_class, mock_worktrees_class, moc
     mock_merge_queue = MagicMock()
     mock_merge_queue.pending = AsyncMock(
         return_value=[
-            {"subtask_id": "task-1", "agent_name": "agent-1", "branch": "horse-fish/agent-1", "priority": 0, "created_at": "2026-03-08T10:00:00Z"},
-            {"subtask_id": "task-2", "agent_name": "agent-2", "branch": "horse-fish/agent-2", "priority": 1, "created_at": "2026-03-08T10:01:00Z"},
+            {"subtask_id": "task-1", "agent_name": "agent-1", "branch": "horse-fish/agent-1",
+             "priority": 0, "created_at": "2026-03-08T10:00:00Z"},
+            {"subtask_id": "task-2", "agent_name": "agent-2", "branch": "horse-fish/agent-2",
+             "priority": 1, "created_at": "2026-03-08T10:01:00Z"},
         ]
     )
     mock_merge_queue_class.return_value = mock_merge_queue

@@ -955,3 +955,90 @@ async def test_merge_falls_back_to_direct_without_queue(mock_pool, mock_planner,
 
     assert result.state == RunState.completed
     mock_pool._worktrees.merge.assert_called_once_with("hf-subtask-1")
+
+
+@pytest.fixture
+def mock_tracer():
+    """Mock Tracer."""
+    from horse_fish.observability.traces import RunTrace, Span, Tracer
+
+    tracer = MagicMock(spec=Tracer)
+    trace = RunTrace(run_id="test", task="test task")
+    span = Span(name="test", trace=trace)
+    tracer.trace_run.return_value = trace
+    tracer.span.return_value = span
+    return tracer
+
+
+@pytest.mark.asyncio
+async def test_run_creates_trace_and_spans(mock_pool, mock_planner, mock_gates, mock_tracer):
+    """Test run() creates a trace and spans for each phase."""
+    mock_planner.decompose.return_value = [
+        Subtask(id="subtask-1", description="Task 1"),
+    ]
+    slot = AgentSlot(
+        id="agent-1",
+        name="hf-subtask-1",
+        runtime="claude",
+        model="claude-sonnet-4.6",
+        capability="builder",
+        state=AgentState.busy,
+        worktree_path="/tmp/wt",
+    )
+    mock_pool.spawn.return_value = slot
+    mock_pool.send_task = AsyncMock()
+    mock_pool.check_status = AsyncMock(return_value=AgentState.dead)
+    mock_pool.collect_result = AsyncMock(
+        return_value=SubtaskResult(
+            subtask_id="subtask-1",
+            success=True,
+            output="Done",
+            diff="commit",
+            duration_seconds=10.0,
+        )
+    )
+    mock_pool._get_slot.return_value = slot
+    mock_gates.run_all = AsyncMock(
+        return_value=[GateResult(gate="compile", passed=True, output="ok", duration_seconds=1.0)]
+    )
+    mock_pool._worktrees.merge = AsyncMock(return_value=True)
+
+    orchestrator = Orchestrator(
+        pool=mock_pool,
+        planner=mock_planner,
+        gates=mock_gates,
+        runtime="claude",
+        tracer=mock_tracer,
+    )
+
+    async def mock_sleep(seconds):
+        return None
+
+    with pytest.MonkeyPatch().context() as m:
+        m.setattr("horse_fish.orchestrator.engine.asyncio.sleep", mock_sleep)
+        result = await orchestrator.run("Build system")
+
+    assert result.state == RunState.completed
+    mock_tracer.trace_run.assert_called_once()
+    # Should have spans for plan, execute, review, merge
+    assert mock_tracer.span.call_count == 4
+    assert mock_tracer.end_span.call_count == 4
+    mock_tracer.end_trace.assert_called_once_with(mock_tracer.trace_run.return_value, "completed")
+
+
+@pytest.mark.asyncio
+async def test_run_ends_trace_on_failure(mock_pool, mock_planner, mock_gates, mock_tracer):
+    """Test run() ends trace with 'failed' on failure."""
+    mock_planner.decompose.side_effect = Exception("LLM error")
+
+    orchestrator = Orchestrator(
+        pool=mock_pool,
+        planner=mock_planner,
+        gates=mock_gates,
+        runtime="claude",
+        tracer=mock_tracer,
+    )
+    result = await orchestrator.run("Build system")
+
+    assert result.state == RunState.failed
+    mock_tracer.end_trace.assert_called_once_with(mock_tracer.trace_run.return_value, "failed")
