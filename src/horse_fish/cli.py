@@ -10,6 +10,7 @@ import click
 from horse_fish.agents.pool import AgentPool
 from horse_fish.agents.tmux import TmuxManager
 from horse_fish.agents.worktree import WorktreeManager
+from horse_fish.memory.store import MemoryStore
 from horse_fish.merge.queue import MergeQueue
 from horse_fish.orchestrator.engine import Orchestrator
 from horse_fish.planner.decompose import Planner
@@ -29,8 +30,10 @@ def _init_components(runtime: str, model: str | None, max_agents: int):
     pool = AgentPool(store, tmux, worktrees)
     planner = Planner(runtime=runtime, model=model)
     gates = ValidationGates()
+    memory = MemoryStore()
     orchestrator = Orchestrator(
-        pool=pool, planner=planner, gates=gates, runtime=runtime, model=model or "", max_agents=max_agents
+        pool=pool, planner=planner, gates=gates, runtime=runtime, model=model or "", max_agents=max_agents,
+        memory=memory,
     )
     return orchestrator, store, pool
 

@@ -955,3 +955,74 @@ async def test_merge_falls_back_to_direct_without_queue(mock_pool, mock_planner,
 
     assert result.state == RunState.completed
     mock_pool._worktrees.merge.assert_called_once_with("hf-subtask-1")
+
+
+# --- Task 2: MemoryStore wiring tests ---
+
+
+@pytest.fixture
+def mock_memory():
+    """Mock MemoryStore."""
+    memory = AsyncMock()
+    memory.store_run_result = AsyncMock()
+    memory.find_similar_tasks = AsyncMock(return_value=[])
+    return memory
+
+
+@pytest.mark.asyncio
+async def test_run_stores_result_in_memory_on_completion(mock_pool, mock_planner, mock_gates, mock_memory):
+    """Test run() stores result in memory when completed."""
+    mock_planner.decompose.return_value = [
+        Subtask(id="subtask-1", description="Task 1"),
+    ]
+    slot = AgentSlot(
+        id="agent-1", name="hf-subtask-1", runtime="claude",
+        model="claude-sonnet-4.6", capability="builder",
+        state=AgentState.busy, worktree_path="/tmp/wt",
+    )
+    mock_pool.spawn.return_value = slot
+    mock_pool.send_task = AsyncMock()
+    mock_pool.check_status = AsyncMock(return_value=AgentState.dead)
+    result_obj = SubtaskResult(
+        subtask_id="subtask-1", success=True, output="Done",
+        diff="commit", duration_seconds=10.0,
+    )
+    mock_pool.collect_result = AsyncMock(return_value=result_obj)
+    mock_pool._get_slot.return_value = slot
+    mock_gates.run_all = AsyncMock(
+        return_value=[GateResult(gate="compile", passed=True, output="ok", duration_seconds=1.0)]
+    )
+    mock_pool._worktrees.merge = AsyncMock(return_value=True)
+
+    orchestrator = Orchestrator(
+        pool=mock_pool, planner=mock_planner, gates=mock_gates,
+        runtime="claude", memory=mock_memory,
+    )
+
+    async def mock_sleep(seconds):
+        return None
+
+    with pytest.MonkeyPatch().context() as m:
+        m.setattr("horse_fish.orchestrator.engine.asyncio.sleep", mock_sleep)
+        run = await orchestrator.run("Build system")
+
+    assert run.state == RunState.completed
+    mock_memory.store_run_result.assert_called_once()
+    call_args = mock_memory.store_run_result.call_args
+    assert call_args[0][0].id == run.id  # first arg is the Run
+    assert len(call_args[0][1]) == 1  # second arg is subtask_results list
+
+
+@pytest.mark.asyncio
+async def test_run_does_not_store_memory_on_failure(mock_pool, mock_planner, mock_gates, mock_memory):
+    """Test run() does NOT store in memory when failed."""
+    mock_planner.decompose.side_effect = Exception("LLM error")
+
+    orchestrator = Orchestrator(
+        pool=mock_pool, planner=mock_planner, gates=mock_gates,
+        runtime="claude", memory=mock_memory,
+    )
+    run = await orchestrator.run("Build system")
+
+    assert run.state == RunState.failed
+    mock_memory.store_run_result.assert_not_called()

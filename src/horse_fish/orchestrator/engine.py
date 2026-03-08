@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 
 from horse_fish.agents.pool import AgentPool
 from horse_fish.dispatch.selector import AgentSelector
+from horse_fish.memory.store import MemoryStore
 from horse_fish.merge.queue import MergeQueue
 from horse_fish.models import AgentState, Run, RunState, SubtaskState
 from horse_fish.planner.decompose import Planner
@@ -36,6 +37,7 @@ class Orchestrator:
         max_agents: int = 3,
         selector: AgentSelector | None = None,
         merge_queue: MergeQueue | None = None,
+        memory: MemoryStore | None = None,
     ) -> None:
         self._pool = pool
         self._planner = planner
@@ -45,6 +47,7 @@ class Orchestrator:
         self._max_agents = max_agents
         self._selector = selector
         self._merge_queue = merge_queue
+        self._memory = memory
 
         self._handlers: dict[RunState, _Handler] = {
             RunState.planning: self._plan,
@@ -66,7 +69,21 @@ class Orchestrator:
             logger.info("Run %s transitioned to %s", run.id, run.state)
 
         run.completed_at = datetime.now(UTC)
+
+        if run.state == RunState.completed:
+            await self._learn(run)
+
         return run
+
+    async def _learn(self, run: Run) -> None:
+        """Store completed run results in memory for future learning."""
+        if not self._memory:
+            return
+        subtask_results = [s.result for s in run.subtasks if s.result]
+        try:
+            await self._memory.store_run_result(run, subtask_results)
+        except Exception as exc:
+            logger.warning("Failed to store run in memory: %s", exc)
 
     async def _plan(self, run: Run) -> Run:
         """Decompose the task into subtasks via the Planner."""
