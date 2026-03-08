@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+from typing import Any
 
 from horse_fish.memory.lessons import LessonStore
 from horse_fish.models import Subtask, TaskComplexity
@@ -47,9 +48,11 @@ class SmartPlanner:
         self,
         planner: Planner,
         lesson_store: LessonStore | None = None,
+        cognee_memory: Any | None = None,
     ) -> None:
         self._planner = planner
         self._lessons = lesson_store
+        self._cognee = cognee_memory
 
     async def decompose(self, task: str, context: str = "") -> tuple[list[Subtask], TaskComplexity]:
         """Classify task complexity, then decompose if needed.
@@ -60,7 +63,13 @@ class SmartPlanner:
         # 1. Query lessons
         lessons_text = self._get_lessons(task)
 
-        # 2. Classify
+        # 2. Query Cognee for semantic context from past runs
+        cognee_context = await self._get_cognee_context(task)
+        if cognee_context:
+            past_work = f"Past similar work:\n{cognee_context}"
+            context = f"{context}\n\n{past_work}" if context else past_work
+
+        # 3. Classify
         complexity = await self._classify(task, context, lessons_text)
 
         # 3. SOLO → single subtask, skip decomposition
@@ -127,4 +136,17 @@ class SmartPlanner:
             return "\n".join(f"- [{les.pattern}] {les.content}" for les in lessons)
         except Exception as exc:
             logger.warning("Failed to query lessons: %s", exc)
+            return ""
+
+    async def _get_cognee_context(self, task: str) -> str:
+        """Retrieve relevant context from Cognee knowledge graph."""
+        if not self._cognee:
+            return ""
+        try:
+            hits = await self._cognee.find_similar_tasks(task)
+            if not hits:
+                return ""
+            return "\n".join(f"- {hit.content}" for hit in hits[:3])
+        except Exception as exc:
+            logger.warning("Failed to query Cognee: %s", exc)
             return ""
