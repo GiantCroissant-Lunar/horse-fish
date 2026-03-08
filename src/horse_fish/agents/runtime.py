@@ -27,7 +27,7 @@ class ClaudeRuntime:
     """Adapter for the Claude Code CLI."""
 
     runtime_id: ClassVar[str] = "claude"
-    ready_pattern: ClassVar[str] = r"^(❯\s|>\s)"
+    ready_pattern: ClassVar[str] = r"❯|shift\+tab|bypass permissions"
     ready_timeout_seconds: ClassVar[int] = 30
 
     def build_spawn_command(self, model: str) -> str:
@@ -59,7 +59,7 @@ class PiRuntime:
     """Adapter for the Pi CLI."""
 
     runtime_id: ClassVar[str] = "pi"
-    ready_pattern: ClassVar[str] = r"^(>\s|›\s)"
+    ready_pattern: ClassVar[str] = r"\d+\.\d+%/\d+\S+"
     ready_timeout_seconds: ClassVar[int] = 45
 
     def build_spawn_command(self, model: str) -> str:

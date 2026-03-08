@@ -49,8 +49,9 @@ class TestClaudeRuntime:
         """Claude ready_pattern matches expected prompt markers."""
         pattern = re.compile(ClaudeRuntime.ready_pattern, re.MULTILINE)
         # Should match prompt markers
-        assert pattern.search("❯ Hello") is not None
-        assert pattern.search("> World") is not None
+        assert pattern.search("Welcome to Claude\n❯ ") is not None
+        assert pattern.search("shift+tab to accept") is not None
+        assert pattern.search("bypass permissions") is not None
         # Should not match loading messages
         assert pattern.search("Loading...") is None
 
@@ -81,11 +82,11 @@ class TestPiRuntime:
         assert "qwen3.5-plus" in command
 
     def test_pi_ready_pattern_matches_prompt(self) -> None:
-        """Pi ready_pattern matches expected prompt markers."""
+        """Pi ready_pattern matches status bar token indicator."""
         pattern = re.compile(PiRuntime.ready_pattern, re.MULTILINE)
-        # Should match prompt markers
-        assert pattern.search("> Hello") is not None
-        assert pattern.search("› World") is not None
+        # Should match Pi's status bar format
+        assert pattern.search("0.0%/1.0M (auto)  (dashscope) qwen3.5-plus") is not None
+        assert pattern.search("42.5%/200k done") is not None
         # Should not match loading messages
         assert pattern.search("Loading Pi...") is None
 
