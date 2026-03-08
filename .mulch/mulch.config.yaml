@@ -6,8 +6,7 @@ domains:
   - observability
   - orchestrator
   - architecture
-  - cli
-  - testing
+  - e2e
 governance:
   max_entries: 100
   warn_entries: 150
