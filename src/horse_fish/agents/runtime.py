@@ -40,6 +40,9 @@ class RuntimeAdapter(Protocol):
     def build_env(self) -> dict[str, str]:
         """Build environment variables required by the runtime."""
 
+    def post_ready_commands(self, model: str) -> list[str]:
+        """Commands to send via tmux after the runtime is ready (e.g. model selection)."""
+
 
 @dataclass(slots=True)
 class ClaudeRuntime:
@@ -57,6 +60,9 @@ class ClaudeRuntime:
     def build_env(self) -> dict[str, str]:
         return {}
 
+    def post_ready_commands(self, model: str) -> list[str]:
+        return []
+
 
 @dataclass(slots=True)
 class CopilotRuntime:
@@ -71,6 +77,9 @@ class CopilotRuntime:
 
     def build_env(self) -> dict[str, str]:
         return {}
+
+    def post_ready_commands(self, model: str) -> list[str]:
+        return []
 
 
 @dataclass(slots=True)
@@ -90,6 +99,9 @@ class PiRuntime:
             return {"DASHSCOPE_API_KEY": api_key}
         return {}
 
+    def post_ready_commands(self, model: str) -> list[str]:
+        return []
+
 
 @dataclass(slots=True)
 class OpenCodeRuntime:
@@ -104,6 +116,9 @@ class OpenCodeRuntime:
 
     def build_env(self) -> dict[str, str]:
         return {}
+
+    def post_ready_commands(self, model: str) -> list[str]:
+        return []
 
 
 @dataclass(slots=True)
@@ -123,6 +138,9 @@ class KimiRuntime:
     def build_env(self) -> dict[str, str]:
         return {}
 
+    def post_ready_commands(self, model: str) -> list[str]:
+        return []
+
 
 @dataclass(slots=True)
 class DroidRuntime:
@@ -133,8 +151,6 @@ class DroidRuntime:
     ready_timeout_seconds: ClassVar[int] = 45
 
     def build_spawn_command(self, model: str) -> str:
-        # Interactive mode — model is pre-configured in ~/.factory/settings.json
-        # The /model command switches models inside the session
         return "droid"
 
     def build_env(self) -> dict[str, str]:
@@ -143,6 +159,12 @@ class DroidRuntime:
         if api_key:
             env["ZAI_API_KEY"] = api_key
         return env
+
+    def post_ready_commands(self, model: str) -> list[str]:
+        """Send /model command to select the configured model after droid starts."""
+        if model:
+            return [f"/model {model}"]
+        return []
 
 
 @dataclass(slots=True)
@@ -158,6 +180,9 @@ class BashRuntime:
 
     def build_env(self) -> dict[str, str]:
         return {}
+
+    def post_ready_commands(self, model: str) -> list[str]:
+        return []
 
 
 RUNTIME_REGISTRY: dict[str, RuntimeAdapter] = {
