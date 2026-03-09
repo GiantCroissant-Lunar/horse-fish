@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,6 +18,12 @@ from horse_fish.orchestrator.engine import Orchestrator
 from horse_fish.planner.decompose import Planner
 from horse_fish.store.db import Store
 from horse_fish.validation.gates import GateResult, ValidationGates
+
+
+@pytest.fixture(autouse=True)
+def _no_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Patch asyncio.sleep to a no-op so polling loops don't block tests."""
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock(return_value=None))
 
 
 @pytest.fixture

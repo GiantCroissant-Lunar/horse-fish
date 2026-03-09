@@ -186,24 +186,27 @@ async def test_execute_decrements_active_count_on_exhausted_retry(orchestrator, 
     mock_pool.send_task = AsyncMock()
     mock_pool.release = AsyncMock()
 
-    # subtask2 completes successfully
-    mock_pool.check_status = AsyncMock(return_value=AgentState.dead)
-    mock_pool.collect_result = AsyncMock(
-        return_value=SubtaskResult(
-            subtask_id="subtask-2",
-            success=True,
-            output="Done",
-            diff="commit",
-            duration_seconds=10.0,
-        )
-    )
+    # agent-1 (stalled) returns busy so poll doesn't complete it — stall detection handles it
+    # agent-2 (new subtask) returns dead with diff — completes normally
+    def check_status_by_agent(agent_id):
+        if agent_id == "agent-1":
+            return AgentState.busy
+        return AgentState.dead
+
+    mock_pool.check_status = AsyncMock(side_effect=check_status_by_agent)
+
+    def collect_result_by_agent(agent_id):
+        if agent_id == "agent-1":
+            return SubtaskResult(subtask_id="subtask-1", success=False, output="", diff="", duration_seconds=0)
+        return SubtaskResult(subtask_id="subtask-2", success=True, output="Done", diff="commit", duration_seconds=10.0)
+
+    mock_pool.collect_result = AsyncMock(side_effect=collect_result_by_agent)
 
     with pytest.MonkeyPatch().context() as m:
         m.setattr("horse_fish.orchestrator.engine.asyncio.sleep", mock_sleep)
         result = await orchestrator._execute(run)
 
-    # subtask1 should be failed, subtask2 should be done
-    # Run should be failed because subtask1 failed
+    # subtask1 should be failed (stall detected, no retries), subtask2 should be done
     assert result.state == RunState.failed
     assert subtask1.state == SubtaskState.failed
     assert subtask2.state == SubtaskState.done

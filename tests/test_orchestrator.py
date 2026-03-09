@@ -1199,24 +1199,21 @@ async def test_execute_detects_stalled_agent_and_retries(mock_pool, mock_planner
     mock_pool.spawn.return_value = slot
     mock_pool.send_task = AsyncMock()
 
-    # After retry, agent completes immediately
-    mock_pool.check_status = AsyncMock(return_value=AgentState.dead)
-    mock_pool.collect_result = AsyncMock(
-        return_value=SubtaskResult(
-            subtask_id="subtask-1", success=True, output="Done", diff="commit", duration_seconds=10
-        )
-    )
+    # agent-1 (stalled) returns busy so poll doesn't auto-complete it — stall detection fires
+    # agent-2 (retried) returns dead with diff — completes normally
+    def check_status_by_agent(agent_id):
+        if agent_id == "agent-1":
+            return AgentState.busy
+        return AgentState.dead
 
-    # Manually set up agent_map as if dispatch happened
-    # We'll patch _check_stalls to have the correct agent_map
-    original_check_stalls = orchestrator._check_stalls
+    mock_pool.check_status = AsyncMock(side_effect=check_status_by_agent)
 
-    async def patched_check_stalls(run, agent_map):
-        # Add the stalled agent to the map
-        agent_map["subtask-1"] = "agent-1"
-        return await original_check_stalls(run, agent_map)
+    def collect_result_by_agent(agent_id):
+        if agent_id == "agent-1":
+            return SubtaskResult(subtask_id="subtask-1", success=False, output="", diff="", duration_seconds=0)
+        return SubtaskResult(subtask_id="subtask-1", success=True, output="Done", diff="commit", duration_seconds=10)
 
-    orchestrator._check_stalls = patched_check_stalls
+    mock_pool.collect_result = AsyncMock(side_effect=collect_result_by_agent)
 
     async def mock_sleep(seconds):
         return None

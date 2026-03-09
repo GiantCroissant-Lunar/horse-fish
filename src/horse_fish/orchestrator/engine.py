@@ -271,6 +271,12 @@ class Orchestrator:
         agent_map: dict[str, str] = {}  # subtask_id → agent_id
         active_count = 0
 
+        # Rebuild agent_map for subtasks already running (e.g. after gate-retry)
+        for subtask in run.subtasks:
+            if subtask.state == SubtaskState.running and subtask.agent:
+                agent_map[subtask.id] = subtask.agent
+                active_count += 1
+
         while True:
             # Dispatch ready subtasks (deps met, not yet running)
             for subtask in run.subtasks:
