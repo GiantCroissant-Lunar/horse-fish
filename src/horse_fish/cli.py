@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 
 import click
@@ -38,11 +39,13 @@ def _init_components(runtime: str, model: str | None, max_agents: int, planner_r
     project_context = claude_md.read_text() if claude_md.exists() else None
     pool = AgentPool(store, tmux, worktrees, project_context=project_context)
     planner = Planner(runtime=planner_runtime or runtime, model=model if not planner_runtime else None)
-    effective_model = planner.model  # resolved default if model was None
+    # Use user-specified model for agents; only fall back to planner default when no separate planner runtime
+    effective_model = model or (planner.model if not planner_runtime else "")
     gates = ValidationGates()
     memory = MemoryStore()
     lesson_store = LessonStore(store)
-    cognee_memory = CogneeMemory() if CogneeMemory else None
+    has_llm_key = os.environ.get("INCEPTION_API_KEY") or os.environ.get("DASHSCOPE_API_KEY")
+    cognee_memory = CogneeMemory() if CogneeMemory and has_llm_key else None
     orchestrator = Orchestrator(
         pool=pool,
         planner=planner,

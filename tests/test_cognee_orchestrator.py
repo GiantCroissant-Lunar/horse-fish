@@ -104,6 +104,8 @@ class TestCLICogneeWiring:
         # Mock CogneeMemory to avoid real cognee import
         mock_class = MagicMock()
         monkeypatch.setattr("horse_fish.cli.CogneeMemory", mock_class)
+        # CogneeMemory requires an LLM key to be present
+        monkeypatch.setenv("INCEPTION_API_KEY", "test-key")  # pragma: allowlist secret
 
         from horse_fish.cli import _init_components
 
