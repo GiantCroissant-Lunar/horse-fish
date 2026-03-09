@@ -206,11 +206,14 @@ class Orchestrator:
             metadata={
                 "tool_count": runtime_summary["tool_count"],
                 "prompt_count": runtime_summary["prompt_count"],
+                "first_observed_at": runtime_summary["first_observed_at"],
+                "last_observed_at": runtime_summary["last_observed_at"],
                 "subtasks_with_runtime_observations": runtime_summary["subtasks_with_runtime_observations"],
                 "subtask_ids": runtime_summary["subtask_ids"],
                 "subtask_breakdown": runtime_summary["subtask_breakdown"],
                 "runtimes": runtime_summary["runtimes"],
                 "observation_names": runtime_summary["observation_names"],
+                "recent_observations": runtime_summary["recent_observations"],
             },
         )
         self._tracer.score_trace(
@@ -234,6 +237,7 @@ class Orchestrator:
                 "subtasks_with_runtime_observations": runtime_summary["subtasks_with_runtime_observations"],
                 "total_subtasks": len(run.subtasks),
                 "subtask_ids": runtime_summary["subtask_ids"],
+                "last_observed_at": runtime_summary["last_observed_at"],
             },
         )
 

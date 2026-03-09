@@ -24,11 +24,14 @@ def mock_pool():
             "total_count": 0,
             "tool_count": 0,
             "prompt_count": 0,
+            "first_observed_at": None,
+            "last_observed_at": None,
             "subtasks_with_runtime_observations": 0,
             "subtask_ids": [],
             "subtask_breakdown": [],
             "runtimes": {},
             "observation_names": {},
+            "recent_observations": [],
         }
     )
     return pool

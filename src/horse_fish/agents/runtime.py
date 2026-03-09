@@ -98,6 +98,7 @@ def extract_runtime_observations(runtime_id: str, output: str, *, limit: int = 6
     if not output or limit <= 0:
         return []
 
+    matches: list[tuple[int, RuntimeOutputObservation]] = []
     observations: list[RuntimeOutputObservation] = []
     seen: set[tuple[str, str, str]] = set()
     rules = (*_RUNTIME_PROMPT_RULES.get(runtime_id, ()), *_COMMON_PROMPT_RULES, *_COMMON_TOOL_RULES)
@@ -112,9 +113,17 @@ def extract_runtime_observations(runtime_id: str, output: str, *, limit: int = 6
             if key in seen:
                 continue
             seen.add(key)
-            observations.append(RuntimeOutputObservation(kind=rule.kind, name=name, excerpt=excerpt[:240]))
-            if len(observations) >= limit:
-                return observations
+            matches.append(
+                (
+                    match.start(),
+                    RuntimeOutputObservation(kind=rule.kind, name=name, excerpt=excerpt[:240]),
+                )
+            )
+
+    for _, observation in sorted(matches, key=lambda item: item[0]):
+        observations.append(observation)
+        if len(observations) >= limit:
+            break
 
     return observations
 

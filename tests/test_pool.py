@@ -619,6 +619,8 @@ async def test_runtime_observation_summary_counts_deduped_events() -> None:
     assert summary["total_count"] == 2
     assert summary["tool_count"] == 1
     assert summary["prompt_count"] == 1
+    assert summary["first_observed_at"] is not None
+    assert summary["last_observed_at"] is not None
     assert summary["subtasks_with_runtime_observations"] == 1
     assert summary["subtask_ids"] == ["subtask-1"]
     assert summary["subtask_breakdown"] == [
@@ -630,11 +632,20 @@ async def test_runtime_observation_summary_counts_deduped_events() -> None:
             "subtask_description": "Implement feature X",
             "prompt_kinds": {"task": 2},
             "observation_names": {"Bash": 1, "permission_prompt": 1},
+            "first_observed_at": summary["subtask_breakdown"][0]["first_observed_at"],
+            "last_observed_at": summary["subtask_breakdown"][0]["last_observed_at"],
+            "latest_excerpt": "Confirm to bypass permissions?",
         }
     ]
+    assert summary["subtask_breakdown"][0]["first_observed_at"] is not None
+    assert summary["subtask_breakdown"][0]["last_observed_at"] is not None
     assert summary["runtimes"] == {"claude": 2}
     assert summary["observation_names"]["Bash"] == 1
     assert summary["observation_names"]["permission_prompt"] == 1
+    assert len(summary["recent_observations"]) == 2
+    assert summary["recent_observations"][-1]["observation_name"] == "permission_prompt"
+    assert summary["recent_observations"][-1]["excerpt"] == "Confirm to bypass permissions?"
+    assert summary["recent_observations"][-1]["observed_at"] is not None
 
 
 @pytest.mark.asyncio

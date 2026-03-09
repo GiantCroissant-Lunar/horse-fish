@@ -91,13 +91,20 @@ class AgentPool:
                 "total_count": 0,
                 "tool_count": 0,
                 "prompt_count": 0,
+                "first_observed_at": None,
+                "last_observed_at": None,
                 "subtasks": set(),
                 "subtask_breakdown": {},
                 "runtimes": {},
                 "observation_names": {},
+                "recent_observations": [],
             },
         )
+        observed_at = datetime.now(UTC).isoformat()
         stats["total_count"] += 1
+        if stats["first_observed_at"] is None:
+            stats["first_observed_at"] = observed_at
+        stats["last_observed_at"] = observed_at
         if observation.kind == "tool":
             stats["tool_count"] += 1
         elif observation.kind == "prompt":
@@ -115,9 +122,16 @@ class AgentPool:
                     "subtask_description": task_context.get("subtask_description"),
                     "prompt_kinds": {},
                     "observation_names": {},
+                    "first_observed_at": None,
+                    "last_observed_at": None,
+                    "latest_excerpt": None,
                 },
             )
             breakdown["count"] += 1
+            if breakdown["first_observed_at"] is None:
+                breakdown["first_observed_at"] = observed_at
+            breakdown["last_observed_at"] = observed_at
+            breakdown["latest_excerpt"] = observation.excerpt
             if observation.kind == "tool":
                 breakdown["tool_count"] += 1
             elif observation.kind == "prompt":
@@ -131,6 +145,16 @@ class AgentPool:
 
         stats["runtimes"][slot.runtime] = stats["runtimes"].get(slot.runtime, 0) + 1
         stats["observation_names"][observation.name] = stats["observation_names"].get(observation.name, 0) + 1
+        stats["recent_observations"].append(
+            {
+                "subtask_id": subtask_id,
+                "observation_name": observation.name,
+                "kind": observation.kind,
+                "excerpt": observation.excerpt,
+                "observed_at": observed_at,
+            }
+        )
+        stats["recent_observations"] = stats["recent_observations"][-5:]
 
     def runtime_observation_summary(self, run_id: str) -> dict[str, Any]:
         """Return per-run counts for runtime-derived observations."""
@@ -140,11 +164,14 @@ class AgentPool:
                 "total_count": 0,
                 "tool_count": 0,
                 "prompt_count": 0,
+                "first_observed_at": None,
+                "last_observed_at": None,
                 "subtasks_with_runtime_observations": 0,
                 "subtask_ids": [],
                 "subtask_breakdown": [],
                 "runtimes": {},
                 "observation_names": {},
+                "recent_observations": [],
             }
 
         subtask_breakdown = [
@@ -154,11 +181,14 @@ class AgentPool:
             "total_count": stats["total_count"],
             "tool_count": stats["tool_count"],
             "prompt_count": stats["prompt_count"],
+            "first_observed_at": stats["first_observed_at"],
+            "last_observed_at": stats["last_observed_at"],
             "subtasks_with_runtime_observations": len(stats["subtasks"]),
             "subtask_ids": sorted(stats["subtasks"]),
             "subtask_breakdown": subtask_breakdown,
             "runtimes": dict(stats["runtimes"]),
             "observation_names": dict(stats["observation_names"]),
+            "recent_observations": list(stats["recent_observations"]),
         }
 
     async def spawn(self, name: str, runtime: str, model: str, capability: str) -> AgentSlot:
