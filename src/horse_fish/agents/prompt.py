@@ -9,6 +9,13 @@ PROMPT_TEMPLATE = """You are an agent in the horse-fish swarm working in an isol
 - Branch: {branch}
 
 {project_context_section}
+## Memory Commands
+Before starting work, search for relevant past knowledge:
+  hf memory search 'keywords about your task'
+
+After completing your work, record what you learned:
+  hf memory store 'description of what was built/learned' --domain general --tags 'tag1,tag2'
+
 ## Task Description
 {task}
 
