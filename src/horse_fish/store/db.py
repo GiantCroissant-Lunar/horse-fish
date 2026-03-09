@@ -241,6 +241,7 @@ class Store:
 
     def insert_queued_run(self, run_id: str, task: str) -> None:
         """Insert a new run in 'queued' state."""
+
         now = datetime.now(UTC).isoformat()
         self.execute(
             "INSERT INTO runs (id, task, state, created_at) VALUES (?, ?, 'queued', ?)",
@@ -257,8 +258,8 @@ class Store:
     def fetch_active_runs(self) -> list[dict]:
         """Fetch runs in active states (planning, executing, reviewing, merging)."""
         return self.fetchall(
-            "SELECT * FROM runs WHERE state IN ('planning', 'executing', 'reviewing', 'merging')"
-            " ORDER BY created_at ASC",
+            "SELECT * FROM runs WHERE state IN ('planning', 'executing', 'reviewing', 'merging') "
+            "ORDER BY created_at ASC",
         )
 
     def update_run_state(self, run_id: str, state: str, completed_at: str | None = None) -> None:
