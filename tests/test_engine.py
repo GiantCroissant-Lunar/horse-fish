@@ -609,8 +609,8 @@ async def test_review_fails_when_gate_retries_exhausted(orchestrator, mock_pool,
 
 
 @pytest.mark.asyncio
-async def test_review_skips_retry_when_agent_dead(orchestrator, mock_pool, mock_gates):
-    """Test that _review doesn't retry when agent tmux session is dead."""
+async def test_review_respawns_dead_agent_for_retry(orchestrator, mock_pool, mock_gates):
+    """Test that _review respawns a dead agent and retries gate failures."""
     from horse_fish.validation.gates import GateResult
 
     subtask = Subtask.create("do something")
@@ -641,12 +641,60 @@ async def test_review_skips_retry_when_agent_dead(orchestrator, mock_pool, mock_
     mock_gates.run_all = AsyncMock(return_value=[failed_gate])
     mock_gates.all_passed = MagicMock(return_value=False)
 
-    # Agent is dead
+    # Agent is dead — respawn should be called
     mock_pool.check_status = AsyncMock(return_value=AgentState.dead)
+    mock_pool.respawn = AsyncMock(return_value=slot)
+    mock_pool.send_task = AsyncMock()
 
     result = await orchestrator._review(run)
 
-    # Should fail — can't retry with dead agent
+    # Should respawn, send fix prompt, and return to executing
+    mock_pool.respawn.assert_called_once_with("agent-1")
+    mock_pool.send_task.assert_called_once()
+    assert result.state == RunState.executing
+    assert subtask.state == SubtaskState.running
+    assert subtask.gate_retry_count == 1
+
+
+async def test_review_fails_when_respawn_errors(orchestrator, mock_pool, mock_gates):
+    """Test that _review fails subtask when respawn raises an exception."""
+    from horse_fish.validation.gates import GateResult
+
+    subtask = Subtask.create("do something")
+    subtask.state = SubtaskState.done
+    subtask.agent = "agent-1"
+    subtask.gate_retry_count = 0
+    subtask.max_gate_retries = 1
+
+    run = Run.create("test task")
+    run.subtasks = [subtask]
+    run.state = RunState.reviewing
+
+    slot = AgentSlot(
+        id="agent-1",
+        name="hf-test",
+        runtime="claude",
+        model="claude-sonnet-4.6",
+        capability="builder",
+        state=AgentState.busy,
+        worktree_path="/tmp/test-worktree",
+    )
+    mock_pool._get_slot.return_value = slot
+
+    mock_gates.auto_fix_and_commit = AsyncMock(
+        return_value=GateResult(gate="auto-fix", passed=True, output="ok", duration_seconds=0.1)
+    )
+    failed_gate = GateResult(gate="pytest", passed=False, output="1 failed", duration_seconds=1.0)
+    mock_gates.run_all = AsyncMock(return_value=[failed_gate])
+    mock_gates.all_passed = MagicMock(return_value=False)
+
+    # Agent is dead and respawn fails
+    mock_pool.check_status = AsyncMock(return_value=AgentState.dead)
+    mock_pool.respawn = AsyncMock(side_effect=RuntimeError("tmux spawn failed"))
+
+    result = await orchestrator._review(run)
+
+    # Should fail since respawn failed
     assert result.state == RunState.failed
     assert subtask.state == SubtaskState.failed
 

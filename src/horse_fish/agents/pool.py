@@ -114,6 +114,40 @@ class AgentPool:
             return AgentState.dead
         return slot.state
 
+    async def respawn(self, agent_id: str) -> AgentSlot:
+        """Re-spawn a dead agent in its existing worktree with a fresh tmux session.
+
+        Used by gate-retry when the original agent exited but the worktree
+        still contains fixable code.
+        """
+        slot = self._get_slot(agent_id)
+        if not slot.worktree_path:
+            raise ValueError(f"Agent {agent_id} has no worktree path for respawn")
+
+        adapter = RUNTIME_REGISTRY[slot.runtime]
+        command = adapter.build_spawn_command(slot.model)
+        env = adapter.build_env() or None
+
+        # Kill old session if it somehow lingers
+        await self._tmux.kill_session(slot.tmux_session)
+
+        pid = await self._tmux.spawn(name=slot.tmux_session, command=command, cwd=slot.worktree_path, env=env)
+
+        # Update in-memory slot
+        slot.state = AgentState.idle
+        slot.pid = pid
+        slot.started_at = datetime.now(UTC)
+
+        # Wait for ready prompt
+        await self._wait_for_ready(slot)
+
+        self._store.execute(
+            "UPDATE agents SET state = ?, pid = ?, started_at = ? WHERE id = ?",
+            (AgentState.idle, pid, slot.started_at.isoformat(), agent_id),
+        )
+
+        return slot
+
     async def collect_result(self, agent_id: str) -> SubtaskResult:
         """Capture pane output and worktree diff; return a SubtaskResult."""
         slot = self._get_slot(agent_id)

@@ -396,32 +396,42 @@ class Orchestrator:
                 logger.warning("Subtask %s failed gates: %s", subtask.id, gate_output)
 
                 if subtask.gate_retry_count < subtask.max_gate_retries:
-                    # Check agent is still alive
+                    # Check agent is still alive; respawn if dead
                     agent_status = await self._pool.check_status(subtask.agent)
-                    if agent_status != AgentState.dead:
-                        # Send fix prompt to agent
-                        from horse_fish.agents.prompt import build_fix_prompt
+                    if agent_status == AgentState.dead:
+                        try:
+                            logger.info("Respawning dead agent for subtask %s gate retry", subtask.id)
+                            await self._pool.respawn(subtask.agent)
+                        except Exception as exc:
+                            logger.error("Failed to respawn agent for subtask %s: %s", subtask.id, exc)
+                            subtask.state = SubtaskState.failed
+                            self._persist_subtask(subtask, run.id)
+                            all_passed = False
+                            continue
 
-                        fix_prompt = build_fix_prompt(
-                            gate_output=gate_output,
-                            worktree_path=slot.worktree_path,
-                            branch=slot.branch or "",
-                        )
-                        await self._pool.send_task(subtask.agent, fix_prompt)
-                        subtask.state = SubtaskState.running
-                        subtask.gate_retry_count += 1
-                        subtask.last_activity_at = datetime.now(UTC)
-                        self._persist_subtask(subtask, run.id)
-                        needs_re_execute = True
-                        logger.info(
-                            "Sent fix prompt to agent for subtask %s (gate retry %d/%d)",
-                            subtask.id,
-                            subtask.gate_retry_count,
-                            subtask.max_gate_retries,
-                        )
-                        continue
+                    # Send fix prompt to agent
+                    from horse_fish.agents.prompt import build_fix_prompt
 
-                # No retries left or agent dead
+                    fix_prompt = build_fix_prompt(
+                        gate_output=gate_output,
+                        worktree_path=slot.worktree_path,
+                        branch=slot.branch or "",
+                    )
+                    await self._pool.send_task(subtask.agent, fix_prompt, raw=True)
+                    subtask.state = SubtaskState.running
+                    subtask.gate_retry_count += 1
+                    subtask.last_activity_at = datetime.now(UTC)
+                    self._persist_subtask(subtask, run.id)
+                    needs_re_execute = True
+                    logger.info(
+                        "Sent fix prompt to agent for subtask %s (gate retry %d/%d)",
+                        subtask.id,
+                        subtask.gate_retry_count,
+                        subtask.max_gate_retries,
+                    )
+                    continue
+
+                # No retries left
                 subtask.state = SubtaskState.failed
                 self._persist_subtask(subtask, run.id)
                 all_passed = False
