@@ -305,3 +305,127 @@ def test_upsert_subtask_update(tmp_path: Path) -> None:
     assert row["agent_id"] == "agent-1"
     assert row["retry_count"] == 1
     store.close()
+
+
+def test_insert_queued_run(tmp_path: Path) -> None:
+    """insert_queued_run should insert a run with state 'queued'."""
+    store = make_store(tmp_path)
+    store.migrate()
+    store.insert_queued_run("run-1", "test task")
+    row = store.fetchone("SELECT * FROM runs WHERE id = ?", ("run-1",))
+    assert row is not None
+    assert row["state"] == "queued"
+    assert row["task"] == "test task"
+    store.close()
+
+
+def test_fetch_queued_runs_ordering(tmp_path: Path) -> None:
+    """fetch_queued_runs should return runs oldest first."""
+    store = make_store(tmp_path)
+    store.migrate()
+    store.execute(
+        "INSERT INTO runs (id, task, state, created_at) VALUES (?, ?, ?, ?)",
+        ("run-1", "task 1", "queued", "2026-01-01T00:00:00Z"),
+    )
+    store.execute(
+        "INSERT INTO runs (id, task, state, created_at) VALUES (?, ?, ?, ?)",
+        ("run-2", "task 2", "queued", "2026-01-02T00:00:00Z"),
+    )
+    store.execute(
+        "INSERT INTO runs (id, task, state, created_at) VALUES (?, ?, ?, ?)",
+        ("run-3", "task 3", "queued", "2026-01-03T00:00:00Z"),
+    )
+    rows = store.fetch_queued_runs()
+    assert len(rows) == 3
+    assert rows[0]["id"] == "run-1"
+    assert rows[1]["id"] == "run-2"
+    assert rows[2]["id"] == "run-3"
+    store.close()
+
+
+def test_fetch_queued_runs_excludes_active(tmp_path: Path) -> None:
+    """fetch_queued_runs should only return queued runs, not active ones."""
+    store = make_store(tmp_path)
+    store.migrate()
+    store.execute(
+        "INSERT INTO runs (id, task, state, created_at) VALUES (?, ?, ?, ?)",
+        ("run-1", "task 1", "queued", "2026-01-01T00:00:00Z"),
+    )
+    store.execute(
+        "INSERT INTO runs (id, task, state, created_at) VALUES (?, ?, ?, ?)",
+        ("run-2", "task 2", "executing", "2026-01-02T00:00:00Z"),
+    )
+    store.execute(
+        "INSERT INTO runs (id, task, state, created_at) VALUES (?, ?, ?, ?)",
+        ("run-3", "task 3", "queued", "2026-01-03T00:00:00Z"),
+    )
+    rows = store.fetch_queued_runs()
+    assert len(rows) == 2
+    assert all(r["state"] == "queued" for r in rows)
+    store.close()
+
+
+def test_fetch_active_runs(tmp_path: Path) -> None:
+    """fetch_active_runs should return only runs in active states."""
+    store = make_store(tmp_path)
+    store.migrate()
+    store.execute(
+        "INSERT INTO runs (id, task, state, created_at) VALUES (?, ?, ?, ?)",
+        ("run-1", "task 1", "queued", "2026-01-01T00:00:00Z"),
+    )
+    store.execute(
+        "INSERT INTO runs (id, task, state, created_at) VALUES (?, ?, ?, ?)",
+        ("run-2", "task 2", "planning", "2026-01-02T00:00:00Z"),
+    )
+    store.execute(
+        "INSERT INTO runs (id, task, state, created_at) VALUES (?, ?, ?, ?)",
+        ("run-3", "task 3", "executing", "2026-01-03T00:00:00Z"),
+    )
+    store.execute(
+        "INSERT INTO runs (id, task, state, created_at) VALUES (?, ?, ?, ?)",
+        ("run-4", "task 4", "completed", "2026-01-04T00:00:00Z"),
+    )
+    store.execute(
+        "INSERT INTO runs (id, task, state, created_at) VALUES (?, ?, ?, ?)",
+        ("run-5", "task 5", "reviewing", "2026-01-05T00:00:00Z"),
+    )
+    store.execute(
+        "INSERT INTO runs (id, task, state, created_at) VALUES (?, ?, ?, ?)",
+        ("run-6", "task 6", "merging", "2026-01-06T00:00:00Z"),
+    )
+    rows = store.fetch_active_runs()
+    assert len(rows) == 4
+    active_states = {"planning", "executing", "reviewing", "merging"}
+    assert all(r["state"] in active_states for r in rows)
+    store.close()
+
+
+def test_update_run_state(tmp_path: Path) -> None:
+    """update_run_state should update a run's state."""
+    store = make_store(tmp_path)
+    store.migrate()
+    store.execute(
+        "INSERT INTO runs (id, task, state, created_at) VALUES (?, ?, ?, ?)",
+        ("run-1", "task 1", "queued", "2026-01-01T00:00:00Z"),
+    )
+    store.update_run_state("run-1", "planning")
+    row = store.fetchone("SELECT * FROM runs WHERE id = ?", ("run-1",))
+    assert row is not None
+    assert row["state"] == "planning"
+    store.close()
+
+
+def test_update_run_state_with_completed_at(tmp_path: Path) -> None:
+    """update_run_state should set completed_at when provided."""
+    store = make_store(tmp_path)
+    store.migrate()
+    store.execute(
+        "INSERT INTO runs (id, task, state, created_at) VALUES (?, ?, ?, ?)",
+        ("run-1", "task 1", "executing", "2026-01-01T00:00:00Z"),
+    )
+    store.update_run_state("run-1", "completed", "2026-01-02T00:00:00Z")
+    row = store.fetchone("SELECT * FROM runs WHERE id = ?", ("run-1",))
+    assert row is not None
+    assert row["state"] == "completed"
+    assert row["completed_at"] == "2026-01-02T00:00:00Z"
+    store.close()
