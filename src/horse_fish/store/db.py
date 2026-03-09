@@ -186,6 +186,28 @@ class Store:
         rows = self._conn.execute(sql, params).fetchall()
         return [dict(row) for row in rows]
 
+    def fetch_recent_runs(self, limit: int = 10) -> list[dict[str, Any]]:
+        """Fetch recent runs, ordered by creation date (newest first)."""
+        return self.fetchall(
+            "SELECT * FROM runs ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        )
+
+    def fetch_run(self, run_id: str) -> dict[str, Any] | None:
+        """Fetch a single run by ID (supports prefix match)."""
+        exact = self.fetchone("SELECT * FROM runs WHERE id = ?", (run_id,))
+        if exact:
+            return exact
+        matches = self.fetchall("SELECT * FROM runs WHERE id LIKE ?", (f"{run_id}%",))
+        return matches[0] if len(matches) == 1 else None
+
+    def fetch_subtasks(self, run_id: str) -> list[dict[str, Any]]:
+        """Fetch all subtasks for a given run ID, ordered by creation date."""
+        return self.fetchall(
+            "SELECT * FROM subtasks WHERE run_id = ? ORDER BY created_at",
+            (run_id,),
+        )
+
     def close(self) -> None:
         self._conn.close()
 

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 
 import click
@@ -192,6 +194,103 @@ def merge(run_id: str | None, dry_run: bool, force: bool):
                     click.echo(f"    Conflicts: {', '.join(result.conflict_files)}")
     finally:
         store.close()
+
+
+def _format_duration(created_at: str | None, completed_at: str | None) -> str:
+    """Format duration between two ISO timestamps."""
+    if not created_at:
+        return "N/A"
+    try:
+        created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return "N/A"
+    if completed_at:
+        try:
+            completed = datetime.fromisoformat(completed_at.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            completed = datetime.now(UTC)
+    else:
+        completed = datetime.now(UTC)
+    secs = int((completed - created).total_seconds())
+    if secs < 60:
+        return f"{secs}s"
+    if secs < 3600:
+        return f"{secs // 60}m {secs % 60}s"
+    return f"{secs // 3600}h {(secs % 3600) // 60}m"
+
+
+@main.command()
+@click.argument("run_id", required=False)
+@click.option("--recent", default=10, type=int, help="Show last N runs")
+@click.option("--json-output", "as_json", is_flag=True, help="Output as JSON")
+def report(run_id: str | None, recent: int, as_json: bool):
+    """Show run history and details."""
+    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+    store = Store(DB_PATH)
+    store.migrate()
+
+    try:
+        if run_id:
+            _report_detail(store, run_id, as_json)
+        else:
+            _report_recent(store, recent, as_json)
+    finally:
+        store.close()
+
+
+def _report_recent(store: Store, limit: int, as_json: bool) -> None:
+    query = """
+    SELECT r.id, r.task, r.state, r.complexity, r.created_at, r.completed_at,
+           COUNT(s.id) as subtask_count
+    FROM runs r LEFT JOIN subtasks s ON r.id = s.run_id
+    GROUP BY r.id ORDER BY r.created_at DESC LIMIT ?
+    """
+    runs = store.fetchall(query, (limit,))
+    if not runs:
+        click.echo("No runs found.")
+        return
+    if as_json:
+        click.echo(json.dumps(runs, indent=2, default=str))
+        return
+    click.echo(f"{'ID':<10} {'State':<12} {'Complexity':<10} {'Duration':<10} {'Tasks':<6} {'Description'}")
+    click.echo("-" * 90)
+    for r in runs:
+        rid = r["id"][:8]
+        duration = _format_duration(r["created_at"], r["completed_at"])
+        task = (r["task"] or "")[:35]
+        if len(r["task"] or "") > 35:
+            task += "..."
+        click.echo(
+            f"{rid:<10} {r['state'] or '':<12} {r['complexity'] or '-':<10} "
+            f"{duration:<10} {r['subtask_count']:<6} {task}"
+        )
+    click.echo(f"\nShowing {len(runs)} run(s)")
+
+
+def _report_detail(store: Store, run_id: str, as_json: bool) -> None:
+    run = store.fetch_run(run_id)
+    if not run:
+        click.echo(f"Run '{run_id}' not found.")
+        return
+    subtasks = store.fetch_subtasks(run["id"])
+    if as_json:
+        click.echo(json.dumps({"run": run, "subtasks": subtasks}, indent=2, default=str))
+        return
+    duration = _format_duration(run["created_at"], run["completed_at"])
+    click.echo(f"Run: {run['id']}")
+    click.echo(f"Task: {run['task']}")
+    click.echo(f"State: {run['state']}  Complexity: {run['complexity'] or '-'}  Duration: {duration}")
+    click.echo(f"Created: {run['created_at']}  Completed: {run['completed_at'] or 'in-progress'}")
+    if subtasks:
+        click.echo(f"\nSubtasks ({len(subtasks)}):")
+        click.echo(f"  {'ID':<10} {'State':<10} {'Agent':<16} {'Retries':<8} {'Description'}")
+        click.echo(f"  {'-' * 80}")
+        for s in subtasks:
+            sid = s["id"][:8]
+            agent = (s["agent_id"] or "-")[:14]
+            click.echo(f"  {sid:<10} {s['state']:<10} {agent:<16} {s['retry_count']:<8} {s['description'][:40]}")
+    else:
+        click.echo("\nNo subtasks.")
 
 
 @main.command()
