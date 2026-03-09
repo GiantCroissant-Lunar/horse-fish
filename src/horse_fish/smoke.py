@@ -108,13 +108,20 @@ def verify_merge_commit(repo_root: Path, seed_sha: str) -> tuple[bool, str]:
 
 async def verify_cognee(cognee_memory) -> tuple[bool, str]:
     """Search Cognee for smokefix-related knowledge. Returns (found, detail)."""
+    import asyncio
+
     if cognee_memory is None:
         return False, "skipped — cognee not installed"
     try:
-        hits = await cognee_memory.search("smokefix add function bug fix")
+        hits = await asyncio.wait_for(
+            cognee_memory.search("smokefix add function bug fix"),
+            timeout=30,
+        )
         if hits:
             return True, f"found {len(hits)} hits"
         return False, "no hits found"
+    except asyncio.TimeoutError:
+        return False, "skipped — cognee search timed out"
     except Exception as exc:
         return False, f"error: {exc}"
 
