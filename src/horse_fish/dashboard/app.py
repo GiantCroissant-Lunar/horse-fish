@@ -5,12 +5,14 @@ from __future__ import annotations
 from textual.app import App
 
 from horse_fish.agents.tmux import TmuxManager
-from horse_fish.dashboard.screens import QueueScreen  # noqa: F401
+from horse_fish.dashboard.screens import QueueScreen
 from horse_fish.store.db import Store
 
 
 class DashApp(App):
     """Live TUI dashboard for horse-fish agent swarm."""
+
+    SCREENS = {"queue": QueueScreen}
 
     CSS = """
     QueueScreen {
@@ -78,7 +80,7 @@ class DashApp(App):
     def on_mount(self) -> None:
         self._store = Store(self._db_path)
         self._store.migrate()
-        self.push_screen("queue")
+        self.push_screen(QueueScreen())
 
     @property
     def store(self) -> Store | None:
