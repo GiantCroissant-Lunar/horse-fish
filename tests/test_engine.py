@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from horse_fish.models import AgentSlot, AgentState, Run, RunState, Subtask, SubtaskResult, SubtaskState
 from horse_fish.orchestrator.engine import Orchestrator
+from horse_fish.store.db import Store
 
 
 @pytest.fixture
@@ -294,3 +296,175 @@ async def test_check_stalls_removes_failed_from_agent_map(mock_pool, mock_planne
     # Failed subtask should be removed from agent_map
     assert "subtask-1" not in agent_map
     assert subtask.state == SubtaskState.failed
+
+
+@pytest.fixture
+def tmp_store(tmp_path: Path) -> Store:
+    """Create a temporary Store for testing."""
+    store = Store(tmp_path / "test.db")
+    store.migrate()
+    return store
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_persists_run_initial_state(tmp_path: Path, mock_pool, mock_planner, mock_gates, tmp_store):
+    """Test that orchestrator persists run initial state to SQLite."""
+    orchestrator = Orchestrator(
+        pool=mock_pool,
+        planner=mock_planner,
+        gates=mock_gates,
+        runtime="claude",
+        store=tmp_store,
+    )
+
+    # Mock planner to return one subtask
+    subtask = Subtask.create("do something")
+    mock_planner.decompose = AsyncMock(return_value=[subtask])
+
+    # Mock pool to complete the subtask immediately
+    slot = AgentSlot(
+        id="agent-1",
+        name="hf-test",
+        runtime="claude",
+        model="claude-sonnet-4.6",
+        capability="builder",
+        state=AgentState.busy,
+    )
+    mock_pool.spawn = AsyncMock(return_value=slot)
+    mock_pool.send_task = AsyncMock()
+    mock_pool.check_status = AsyncMock(return_value=AgentState.dead)
+    mock_pool.collect_result = AsyncMock(
+        return_value=SubtaskResult(
+            subtask_id=subtask.id,
+            success=True,
+            output="Done",
+            diff="commit",
+            duration_seconds=10.0,
+        )
+    )
+    mock_pool._get_slot = MagicMock(return_value=slot)
+    mock_gates.run_all = AsyncMock(return_value=[])
+
+    # Mock worktree merge
+    mock_pool._worktrees = AsyncMock()
+    mock_pool._worktrees.merge = AsyncMock(return_value=True)
+
+    with pytest.MonkeyPatch().context() as m:
+        m.setattr("horse_fish.orchestrator.engine.asyncio.sleep", mock_sleep)
+        result = await orchestrator.run("test task")
+
+    # Check run was persisted
+    row = tmp_store.fetchone("SELECT * FROM runs WHERE id = ?", (result.id,))
+    assert row is not None
+    assert row["task"] == "test task"
+    assert row["state"] == "completed"
+
+    tmp_store.close()
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_persists_subtask_state(tmp_path: Path, mock_pool, mock_planner, mock_gates, tmp_store):
+    """Test that orchestrator persists subtask state changes to SQLite."""
+    orchestrator = Orchestrator(
+        pool=mock_pool,
+        planner=mock_planner,
+        gates=mock_gates,
+        runtime="claude",
+        store=tmp_store,
+    )
+
+    # Mock planner to return one subtask
+    subtask = Subtask.create("do something")
+    mock_planner.decompose = AsyncMock(return_value=[subtask])
+
+    # Mock pool to complete the subtask immediately
+    slot = AgentSlot(
+        id="agent-1",
+        name="hf-test",
+        runtime="claude",
+        model="claude-sonnet-4.6",
+        capability="builder",
+        state=AgentState.busy,
+    )
+    mock_pool.spawn = AsyncMock(return_value=slot)
+    mock_pool.send_task = AsyncMock()
+    mock_pool.check_status = AsyncMock(return_value=AgentState.dead)
+    mock_pool.collect_result = AsyncMock(
+        return_value=SubtaskResult(
+            subtask_id=subtask.id,
+            success=True,
+            output="Done",
+            diff="commit",
+            duration_seconds=10.0,
+        )
+    )
+    mock_pool._get_slot = MagicMock(return_value=slot)
+    mock_gates.run_all = AsyncMock(return_value=[])
+
+    # Mock worktree merge
+    mock_pool._worktrees = AsyncMock()
+    mock_pool._worktrees.merge = AsyncMock(return_value=True)
+
+    with pytest.MonkeyPatch().context() as m:
+        m.setattr("horse_fish.orchestrator.engine.asyncio.sleep", mock_sleep)
+        await orchestrator.run("test task")
+
+    # Check subtask was persisted
+    row = tmp_store.fetchone("SELECT * FROM subtasks WHERE id = ?", (subtask.id,))
+    assert row is not None
+    assert row["description"] == "do something"
+    assert row["state"] == "done"
+    assert row["agent_id"] == "agent-1"
+
+    tmp_store.close()
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_without_store_does_not_persist(tmp_path: Path, mock_pool, mock_planner, mock_gates):
+    """Test that orchestrator without store does not persist to SQLite."""
+    orchestrator = Orchestrator(
+        pool=mock_pool,
+        planner=mock_planner,
+        gates=mock_gates,
+        runtime="claude",
+        store=None,
+    )
+
+    # Mock planner to return one subtask
+    subtask = Subtask.create("do something")
+    mock_planner.decompose = AsyncMock(return_value=[subtask])
+
+    # Mock pool to complete the subtask immediately
+    slot = AgentSlot(
+        id="agent-1",
+        name="hf-test",
+        runtime="claude",
+        model="claude-sonnet-4.6",
+        capability="builder",
+        state=AgentState.busy,
+    )
+    mock_pool.spawn = AsyncMock(return_value=slot)
+    mock_pool.send_task = AsyncMock()
+    mock_pool.check_status = AsyncMock(return_value=AgentState.dead)
+    mock_pool.collect_result = AsyncMock(
+        return_value=SubtaskResult(
+            subtask_id=subtask.id,
+            success=True,
+            output="Done",
+            diff="commit",
+            duration_seconds=10.0,
+        )
+    )
+    mock_pool._get_slot = MagicMock(return_value=slot)
+    mock_gates.run_all = AsyncMock(return_value=[])
+
+    # Mock worktree merge
+    mock_pool._worktrees = AsyncMock()
+    mock_pool._worktrees.merge = AsyncMock(return_value=True)
+
+    with pytest.MonkeyPatch().context() as m:
+        m.setattr("horse_fish.orchestrator.engine.asyncio.sleep", mock_sleep)
+        await orchestrator.run("test task")
+
+    # Should not raise even without store
+    # (persistence methods should gracefully skip when store is None)

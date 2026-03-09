@@ -108,10 +108,10 @@ def test_subtasks_table(tmp_path: Path) -> None:
         )
         store.execute(
             """
-            INSERT INTO subtasks (id, run_id, description, state, deps, files_hint)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO subtasks (id, run_id, description, state, deps, retry_count, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            ("sub-1", "run-1", "do something", "pending", "[]", "[]"),
+            ("sub-1", "run-1", "do something", "pending", "[]", "0", "now"),
         )
         row = store.fetchone("SELECT * FROM subtasks WHERE id = ?", ("sub-1",))
         assert row is not None
@@ -177,4 +177,131 @@ def test_lessons_query_by_category(tmp_path: Path) -> None:
     rows = store.fetchall("SELECT * FROM lessons WHERE category = ?", ("planner",))
     assert len(rows) == 1
     assert rows[0]["id"] == "lesson-1"
+    store.close()
+
+
+def test_runs_table_has_complexity_column(tmp_path: Path) -> None:
+    """Runs table should have complexity column."""
+    store = make_store(tmp_path)
+    store.migrate()
+    columns = {r["name"] for r in store.fetchall("PRAGMA table_info(runs)")}
+    assert "complexity" in columns
+    store.close()
+
+
+def test_subtasks_table_has_retry_count_and_created_at(tmp_path: Path) -> None:
+    """Subtasks table should have retry_count and created_at columns."""
+    store = make_store(tmp_path)
+    store.migrate()
+    columns = {r["name"] for r in store.fetchall("PRAGMA table_info(subtasks)")}
+    assert "retry_count" in columns
+    assert "created_at" in columns
+    store.close()
+
+
+def test_upsert_run_insert(tmp_path: Path) -> None:
+    """upsert_run should insert a new run."""
+    store = make_store(tmp_path)
+    store.migrate()
+    store.upsert_run(
+        run_id="run-1",
+        task="test task",
+        state="planning",
+        complexity="SOLO",
+        created_at="2026-03-09T00:00:00Z",
+    )
+    row = store.fetchone("SELECT * FROM runs WHERE id = ?", ("run-1",))
+    assert row is not None
+    assert row["task"] == "test task"
+    assert row["state"] == "planning"
+    assert row["complexity"] == "SOLO"
+    store.close()
+
+
+def test_upsert_run_update(tmp_path: Path) -> None:
+    """upsert_run should update an existing run."""
+    store = make_store(tmp_path)
+    store.migrate()
+    store.upsert_run(
+        run_id="run-1",
+        task="test task",
+        state="planning",
+        created_at="2026-03-09T00:00:00Z",
+    )
+    # On update, pass the original created_at to preserve it
+    store.upsert_run(
+        run_id="run-1",
+        task="test task",
+        state="completed",
+        complexity="TRIO",
+        created_at="2026-03-09T00:00:00Z",
+        completed_at="2026-03-09T01:00:00Z",
+    )
+    row = store.fetchone("SELECT * FROM runs WHERE id = ?", ("run-1",))
+    assert row is not None
+    assert row["state"] == "completed"
+    assert row["complexity"] == "TRIO"
+    assert row["completed_at"] == "2026-03-09T01:00:00Z"
+    store.close()
+
+
+def test_upsert_subtask_insert(tmp_path: Path) -> None:
+    """upsert_subtask should insert a new subtask."""
+    store = make_store(tmp_path)
+    store.migrate()
+    store.upsert_run(
+        run_id="run-1",
+        task="test task",
+        state="planning",
+        created_at="2026-03-09T00:00:00Z",
+    )
+    store.upsert_subtask(
+        subtask_id="sub-1",
+        run_id="run-1",
+        description="do something",
+        state="pending",
+        deps='["dep-1"]',
+        retry_count=0,
+        created_at="2026-03-09T00:00:00Z",
+    )
+    row = store.fetchone("SELECT * FROM subtasks WHERE id = ?", ("sub-1",))
+    assert row is not None
+    assert row["description"] == "do something"
+    assert row["state"] == "pending"
+    assert row["deps"] == '["dep-1"]'
+    assert row["retry_count"] == 0
+    store.close()
+
+
+def test_upsert_subtask_update(tmp_path: Path) -> None:
+    """upsert_subtask should update an existing subtask."""
+    store = make_store(tmp_path)
+    store.migrate()
+    store.upsert_run(
+        run_id="run-1",
+        task="test task",
+        state="planning",
+        created_at="2026-03-09T00:00:00Z",
+    )
+    store.upsert_subtask(
+        subtask_id="sub-1",
+        run_id="run-1",
+        description="do something",
+        state="pending",
+        created_at="2026-03-09T00:00:00Z",
+    )
+    store.upsert_subtask(
+        subtask_id="sub-1",
+        run_id="run-1",
+        description="do something",
+        state="done",
+        agent_id="agent-1",
+        retry_count=1,
+        created_at="2026-03-09T00:00:00Z",
+    )
+    row = store.fetchone("SELECT * FROM subtasks WHERE id = ?", ("sub-1",))
+    assert row is not None
+    assert row["state"] == "done"
+    assert row["agent_id"] == "agent-1"
+    assert row["retry_count"] == 1
     store.close()

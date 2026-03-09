@@ -53,6 +53,7 @@ def _init_components(runtime: str, model: str | None, max_agents: int):
         memory=memory,
         lesson_store=lesson_store,
         cognee_memory=cognee_memory,
+        store=store,
     )
     return orchestrator, store, pool
 

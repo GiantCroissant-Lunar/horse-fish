@@ -97,7 +97,10 @@ class AgentPool:
             project_context=self._project_context,
         )
         await self._tmux.send_keys(slot.tmux_session, full_prompt)
-        self._store.execute("UPDATE agents SET state = ?, task_id = ? WHERE id = ?", (AgentState.busy, task_id, agent_id))
+        self._store.execute(
+            "UPDATE agents SET state = ?, task_id = ? WHERE id = ?",
+            (AgentState.busy, task_id, agent_id),
+        )
 
     async def check_status(self, agent_id: str) -> AgentState:
         """Return the agent's current state; mark dead if its tmux session is gone."""
