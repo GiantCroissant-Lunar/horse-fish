@@ -5,7 +5,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: langfuse
-      POSTGRES_PASSWORD: langfuse
+      POSTGRES_PASSWORD: langfuse  # pragma: allowlist secret (localhost dev only)
       POSTGRES_DB: langfuse
     ports:
       - "127.0.0.1:5432:5432"
@@ -54,7 +54,7 @@ services:
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: langfuse
-      MINIO_ROOT_PASSWORD: langfuse123
+      MINIO_ROOT_PASSWORD: langfuse123  # pragma: allowlist secret (localhost dev only)
     ports:
       - "0.0.0.0:9090:9000"
       - "127.0.0.1:9091:9001"
@@ -81,7 +81,7 @@ services:
     ports:
       - "127.0.0.1:3030:3030"
     environment:
-      DATABASE_URL: postgresql://langfuse:langfuse@langfuse-postgres:5432/langfuse
+      DATABASE_URL: postgresql://langfuse:langfuse@langfuse-postgres:5432/langfuse  # pragma: allowlist secret
       CLICKHOUSE_URL: http://langfuse-clickhouse:8123
       CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse:langfuse@langfuse-clickhouse:9000/langfuse
       REDIS_HOST: langfuse-redis
@@ -95,7 +95,7 @@ services:
       SALT: "horse-fish-salt-change-in-prod"
       ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
       TELEMETRY_ENABLED: "false"
-      NEXTAUTH_SECRET: "horse-fish-secret"
+      NEXTAUTH_SECRET: "horse-fish-secret"  # pragma: allowlist secret (localhost dev only)
       NEXTAUTH_URL: "http://localhost:3000"
 
   langfuse-web:
@@ -113,7 +113,7 @@ services:
     ports:
       - "0.0.0.0:3000:3000"
     environment:
-      DATABASE_URL: postgresql://langfuse:langfuse@langfuse-postgres:5432/langfuse
+      DATABASE_URL: postgresql://langfuse:langfuse@langfuse-postgres:5432/langfuse  # pragma: allowlist secret
       CLICKHOUSE_URL: http://langfuse-clickhouse:8123
       CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse:langfuse@langfuse-clickhouse:9000/langfuse
       REDIS_HOST: langfuse-redis
@@ -127,7 +127,7 @@ services:
       SALT: "horse-fish-salt-change-in-prod"
       ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
       TELEMETRY_ENABLED: "false"
-      NEXTAUTH_SECRET: "horse-fish-secret"
+      NEXTAUTH_SECRET: "horse-fish-secret"  # pragma: allowlist secret (localhost dev only)
       NEXTAUTH_URL: "http://localhost:3000"
 
 volumes:
