@@ -10,21 +10,23 @@ import pytest
 from horse_fish.models import Run, Subtask, SubtaskResult
 
 
-class TestOrchestratorCogneeLearning:
-    """Test that orchestrator._learn() uses CogneeMemory."""
+class TestOrchestratorLearnPhase:
+    """Test that orchestrator._learn() writes to memvid + SQLite entries."""
 
     @pytest.mark.asyncio
-    async def test_learn_calls_cognee_ingest(self):
+    async def test_learn_stores_entries_for_cognee_ingestion(self):
+        """_learn() should call store_entry for each subtask result."""
         from horse_fish.orchestrator.engine import Orchestrator
 
-        mock_cognee = AsyncMock()
-        mock_cognee.ingest_run_result = AsyncMock()
+        mock_memvid = AsyncMock()
+        mock_memvid.store_run_result = AsyncMock()
+        mock_memvid.store_entry = MagicMock(return_value="entry-1")
 
         orch = Orchestrator(
             pool=MagicMock(),
             planner=MagicMock(),
             gates=MagicMock(),
-            cognee_memory=mock_cognee,
+            memory=mock_memvid,
         )
 
         run = Run.create(task="test task")
@@ -37,14 +39,21 @@ class TestOrchestratorCogneeLearning:
 
         await orch._learn(run)
 
-        mock_cognee.ingest_run_result.assert_awaited_once()
+        # store_run_result for memvid backward compat
+        mock_memvid.store_run_result.assert_awaited_once()
+        # store_entry for new Cognee batch ingestion path
+        mock_memvid.store_entry.assert_called_once()
+        call_kwargs = mock_memvid.store_entry.call_args
+        assert call_kwargs[1]["domain"] == "run_result"
+        assert call_kwargs[1]["run_id"] == run.id
 
     @pytest.mark.asyncio
-    async def test_learn_cognee_failure_does_not_crash(self):
+    async def test_learn_no_cognee_direct_ingestion(self):
+        """_learn() should NOT call cognee.ingest_run_result directly."""
         from horse_fish.orchestrator.engine import Orchestrator
 
         mock_cognee = AsyncMock()
-        mock_cognee.ingest_run_result = AsyncMock(side_effect=RuntimeError("cognee down"))
+        mock_cognee.ingest_run_result = AsyncMock()
 
         orch = Orchestrator(
             pool=MagicMock(),
@@ -58,26 +67,25 @@ class TestOrchestratorCogneeLearning:
         run.completed_at = datetime.now(UTC)
         run.subtasks = []
 
-        # Should not raise
         await orch._learn(run)
 
-    @pytest.mark.asyncio
-    async def test_learn_with_both_cognee_and_memvid(self):
-        """Both memory systems are called when present."""
-        from horse_fish.orchestrator.engine import Orchestrator
+        # Cognee should NOT be called during learn — ingestion is now batch via hf memory organize
+        mock_cognee.ingest_run_result.assert_not_awaited()
 
-        mock_cognee = AsyncMock()
-        mock_cognee.ingest_run_result = AsyncMock()
+    @pytest.mark.asyncio
+    async def test_learn_store_entry_failure_does_not_crash(self):
+        """store_entry failure should be logged, not crash."""
+        from horse_fish.orchestrator.engine import Orchestrator
 
         mock_memvid = AsyncMock()
         mock_memvid.store_run_result = AsyncMock()
+        mock_memvid.store_entry = MagicMock(side_effect=RuntimeError("sqlite error"))
 
         orch = Orchestrator(
             pool=MagicMock(),
             planner=MagicMock(),
             gates=MagicMock(),
             memory=mock_memvid,
-            cognee_memory=mock_cognee,
         )
 
         run = Run.create(task="test task")
@@ -88,10 +96,8 @@ class TestOrchestratorCogneeLearning:
             subtask_id="s1", success=True, output="done", diff="", duration_seconds=1.0
         )
 
+        # Should not raise
         await orch._learn(run)
-
-        mock_cognee.ingest_run_result.assert_awaited_once()
-        mock_memvid.store_run_result.assert_awaited_once()
 
 
 class TestCLICogneeWiring:

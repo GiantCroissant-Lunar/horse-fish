@@ -9,8 +9,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from horse_fish.memory.store import MemoryHit, MemoryStore
+from horse_fish.memory.store import MemoryEntry, MemoryHit, MemoryStore
 from horse_fish.models import Run, Subtask, SubtaskResult
+from horse_fish.store.db import Store
 
 
 class MockMemvidClient:
@@ -269,6 +270,152 @@ class TestMemoryStore:
         await store.store("test content")
 
         assert temp_data_dir.exists()
+
+
+class TestMemoryEntry:
+    """Tests for MemoryEntry model."""
+
+    def test_memory_entry_defaults(self):
+        """Test MemoryEntry default values."""
+        entry = MemoryEntry(content="test content")
+        assert entry.content == "test content"
+        assert entry.agent == "unknown"
+        assert entry.run_id is None
+        assert entry.domain == "general"
+        assert entry.tags == []
+        assert entry.ingested is False
+        assert entry.id  # uuid generated
+        assert entry.timestamp  # auto-set
+
+    def test_memory_entry_custom_fields(self):
+        """Test MemoryEntry with custom values."""
+        entry = MemoryEntry(
+            content="fix bug",
+            agent="pi-agent-1",
+            run_id="run-123",
+            domain="planner",
+            tags=["bugfix", "memory"],
+        )
+        assert entry.agent == "pi-agent-1"
+        assert entry.run_id == "run-123"
+        assert entry.domain == "planner"
+        assert entry.tags == ["bugfix", "memory"]
+
+    def test_memory_entry_unique_ids(self):
+        """Test that each MemoryEntry gets a unique ID."""
+        e1 = MemoryEntry(content="a")
+        e2 = MemoryEntry(content="b")
+        assert e1.id != e2.id
+
+
+class TestMemoryStoreWithSQLite:
+    """Tests for MemoryStore SQLite side-table functionality."""
+
+    @pytest.fixture
+    def sqlite_store(self, tmp_path: Path):
+        """Create a real SQLite Store for testing."""
+        db_path = str(tmp_path / "test.db")
+        store = Store(db_path)
+        store.migrate()
+        return store
+
+    @pytest.fixture
+    def memory_with_sqlite(self, tmp_path: Path, mock_memvid_module, sqlite_store):
+        """Create a MemoryStore backed by SQLite."""
+        return MemoryStore(data_dir=tmp_path / "memory", store=sqlite_store)
+
+    def test_store_entry_returns_id(self, memory_with_sqlite):
+        """Test that store_entry returns an entry ID."""
+        entry_id = memory_with_sqlite.store_entry("test content", agent="test-agent")
+        assert entry_id
+        assert len(entry_id) == 36  # UUID format
+
+    def test_store_entry_writes_to_sqlite(self, memory_with_sqlite, sqlite_store):
+        """Test that store_entry persists to SQLite."""
+        memory_with_sqlite.store_entry(
+            "some content",
+            agent="pi-1",
+            run_id="run-abc",
+            domain="planner",
+            tags=["tag1", "tag2"],
+        )
+        rows = sqlite_store.fetchall("SELECT * FROM memory_entries")
+        assert len(rows) == 1
+        assert rows[0]["content"] == "some content"
+        assert rows[0]["agent"] == "pi-1"
+        assert rows[0]["run_id"] == "run-abc"
+        assert rows[0]["domain"] == "planner"
+        assert rows[0]["tags"] == "tag1,tag2"
+        assert rows[0]["ingested"] == 0
+
+    def test_get_uningested_returns_entries(self, memory_with_sqlite):
+        """Test get_uningested returns non-ingested entries."""
+        memory_with_sqlite.store_entry("entry 1", agent="a1")
+        memory_with_sqlite.store_entry("entry 2", agent="a2")
+
+        entries = memory_with_sqlite.get_uningested()
+        assert len(entries) == 2
+        assert all(isinstance(e, MemoryEntry) for e in entries)
+        assert all(not e.ingested for e in entries)
+
+    def test_get_uningested_respects_limit(self, memory_with_sqlite):
+        """Test get_uningested limit parameter."""
+        for i in range(5):
+            memory_with_sqlite.store_entry(f"entry {i}")
+        entries = memory_with_sqlite.get_uningested(limit=2)
+        assert len(entries) == 2
+
+    def test_get_uningested_empty_when_all_ingested(self, memory_with_sqlite):
+        """Test get_uningested returns empty after mark_ingested."""
+        id1 = memory_with_sqlite.store_entry("entry 1")
+        id2 = memory_with_sqlite.store_entry("entry 2")
+        memory_with_sqlite.mark_ingested([id1, id2])
+
+        entries = memory_with_sqlite.get_uningested()
+        assert len(entries) == 0
+
+    def test_mark_ingested_updates_entries(self, memory_with_sqlite, sqlite_store):
+        """Test mark_ingested sets ingested=True."""
+        id1 = memory_with_sqlite.store_entry("entry 1")
+        id2 = memory_with_sqlite.store_entry("entry 2")
+        id3 = memory_with_sqlite.store_entry("entry 3")
+
+        memory_with_sqlite.mark_ingested([id1, id3])
+
+        rows = sqlite_store.fetchall("SELECT id, ingested FROM memory_entries ORDER BY id")
+        ingested_map = {r["id"]: r["ingested"] for r in rows}
+        assert ingested_map[id1] == 1
+        assert ingested_map[id2] == 0
+        assert ingested_map[id3] == 1
+
+    def test_mark_ingested_empty_list(self, memory_with_sqlite):
+        """Test mark_ingested with empty list is a no-op."""
+        memory_with_sqlite.store_entry("entry 1")
+        memory_with_sqlite.mark_ingested([])
+        entries = memory_with_sqlite.get_uningested()
+        assert len(entries) == 1
+
+    def test_get_uningested_without_store(self, tmp_path, mock_memvid_module):
+        """Test get_uningested returns empty when no SQLite store."""
+        memory = MemoryStore(data_dir=tmp_path / "memory")
+        assert memory.get_uningested() == []
+
+    def test_mark_ingested_without_store(self, tmp_path, mock_memvid_module):
+        """Test mark_ingested is no-op when no SQLite store."""
+        memory = MemoryStore(data_dir=tmp_path / "memory")
+        memory.mark_ingested(["some-id"])  # Should not raise
+
+    def test_store_entry_tags_roundtrip(self, memory_with_sqlite):
+        """Test that tags survive store/retrieve roundtrip."""
+        memory_with_sqlite.store_entry("tagged entry", tags=["a", "b", "c"])
+        entries = memory_with_sqlite.get_uningested()
+        assert entries[0].tags == ["a", "b", "c"]
+
+    def test_store_entry_empty_tags(self, memory_with_sqlite):
+        """Test empty tags roundtrip."""
+        memory_with_sqlite.store_entry("no tags")
+        entries = memory_with_sqlite.get_uningested()
+        assert entries[0].tags == []
 
 
 class TestMemoryStoreIntegration:

@@ -155,17 +155,22 @@ class Orchestrator:
             except Exception as exc:
                 logger.warning("Failed to store run in memvid: %s", exc)
 
-        # Tier 2: Cognee knowledge graph (timeout to prevent hangs on bad API keys)
-        if self._cognee_memory:
+        # Tier 2: Store entries with metadata for later Cognee batch ingestion
+        if self._memory:
             try:
-                await asyncio.wait_for(
-                    self._cognee_memory.ingest_run_result(run, subtask_results),
-                    timeout=120,
-                )
-            except TimeoutError:
-                logger.warning("Cognee ingestion timed out after 120s")
+                for result in subtask_results:
+                    content = f"Subtask {result.subtask_id}: success={result.success}\nOutput: {result.output}"
+                    if result.diff:
+                        content += f"\nDiff: {result.diff}"
+                    self._memory.store_entry(
+                        content=content,
+                        agent=getattr(result, "agent_runtime", "unknown") or "unknown",
+                        run_id=run.id,
+                        domain="run_result",
+                        tags=["subtask", result.subtask_id],
+                    )
             except Exception as exc:
-                logger.warning("Failed to ingest run into Cognee: %s", exc)
+                logger.warning("Failed to store run entries for Cognee ingestion: %s", exc)
 
         # Lessons (deterministic pattern extraction)
         if self._lesson_store:

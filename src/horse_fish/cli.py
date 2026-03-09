@@ -47,7 +47,7 @@ def _init_components(runtime: str, model: str | None, max_agents: int, planner_r
     # Use user-specified model for agents; only fall back to planner default when no separate planner runtime
     effective_model = model or (planner.model if not planner_runtime else "")
     gates = ValidationGates()
-    memory = MemoryStore()
+    memory = MemoryStore(store=store)
     lesson_store = LessonStore(store)
     has_llm_key = os.environ.get("INCEPTION_API_KEY") or os.environ.get("DASHSCOPE_API_KEY")
     cognee_memory = CogneeMemory() if CogneeMemory and has_llm_key else None
