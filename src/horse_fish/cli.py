@@ -220,6 +220,44 @@ def _format_duration(created_at: str | None, completed_at: str | None) -> str:
 
 
 @main.command()
+@click.option("--json-output", "as_json", is_flag=True, help="Output as JSON")
+def stats(as_json: bool):
+    """Show aggregate run statistics."""
+    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+    store = Store(DB_PATH)
+    store.migrate()
+
+    try:
+        data = store.fetch_run_stats()
+        if as_json:
+            click.echo(json.dumps(data, indent=2, default=str))
+            return
+        click.echo(f"Total runs: {data['total_runs']}")
+        if data["by_state"]:
+            parts = [f"{state}: {cnt}" for state, cnt in sorted(data["by_state"].items())]
+            click.echo(f"By state:   {', '.join(parts)}")
+        if data["avg_duration_secs"] is not None:
+            secs = int(data["avg_duration_secs"])
+            if secs < 60:
+                dur = f"{secs}s"
+            elif secs < 3600:
+                dur = f"{secs // 60}m {secs % 60}s"
+            else:
+                dur = f"{secs // 3600}h {(secs % 3600) // 60}m"
+            click.echo(f"Avg duration: {dur}")
+        else:
+            click.echo("Avg duration: N/A")
+        if data["runtimes"]:
+            click.echo("Runtimes:")
+            for rt in data["runtimes"]:
+                click.echo(f"  {rt['runtime']}: {rt['count']} subtask(s)")
+        else:
+            click.echo("Runtimes: none recorded")
+    finally:
+        store.close()
+
+
+@main.command()
 @click.argument("run_id", required=False)
 @click.option("--recent", default=10, type=int, help="Show last N runs")
 @click.option("--json-output", "as_json", is_flag=True, help="Output as JSON")
