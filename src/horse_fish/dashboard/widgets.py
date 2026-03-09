@@ -38,6 +38,23 @@ class AgentTable(DataTable):
             self.tmux_session = tmux_session
             super().__init__()
 
+    def on_mount(self) -> None:
+        self.add_columns("Name", "Runtime", "State", "Task")
+
+    def update_agents(self, agents: list[dict]) -> None:
+        """Refresh table data from SQLite agent rows."""
+        self.clear()
+        for agent in agents:
+            state = agent.get("state", "")
+            style = "green" if state == "idle" else "yellow" if state == "busy" else "red"
+            self.add_row(
+                agent.get("name", ""),
+                agent.get("runtime", ""),
+                f"[{style}]{state}[/]",
+                agent.get("task_id", "") or "-",
+                key=agent.get("id", ""),
+            )
+
     def on_data_table_cursor_changed(self, event) -> None:
         """Handle cursor change to emit AgentSelected message."""
         if self.cursor_row is not None and self.cursor_row < self.row_count:
@@ -55,6 +72,23 @@ class SubtaskTable(DataTable):
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
+
+    def on_mount(self) -> None:
+        self.add_columns("Description", "State", "Agent")
+
+    def update_subtasks(self, subtasks: list[dict]) -> None:
+        """Refresh table data from SQLite subtask rows."""
+        self.clear()
+        for st in subtasks:
+            state = st.get("state", "")
+            style = {"done": "green", "running": "yellow", "pending": "dim", "failed": "red"}.get(state, "")
+            desc = st.get("description", "")[:40]
+            self.add_row(
+                desc,
+                f"[{style}]{state}[/]" if style else state,
+                st.get("agent_id", "") or "-",
+                key=st.get("id", ""),
+            )
 
     @staticmethod
     def state_style(state: str) -> str:

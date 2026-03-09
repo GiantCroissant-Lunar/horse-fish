@@ -191,6 +191,18 @@ def logs(agent, lines):
 
 
 @main.command()
+def dash():
+    """Live TUI dashboard (read-only)."""
+    try:
+        from horse_fish.dashboard.app import DashApp
+    except ImportError:
+        click.echo("Dashboard requires textual: pip install 'horse-fish[dashboard]'")
+        return
+    app = DashApp(db_path=DB_PATH)
+    app.run()
+
+
+@main.command()
 @click.option("--runtime", default="pi", help="Runtime for smoke test agent")
 @click.option("--model", default=None, help="Model override")
 def smoke(runtime: str, model: str | None):

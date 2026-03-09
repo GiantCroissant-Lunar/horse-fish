@@ -1,0 +1,1 @@
+{"type":"pattern","name":"textual-dashboard-polling","description":"Textual dashboard pattern: DashApp uses set_interval for polling SQLite store, query_one for widget updates, and reactive properties for pipeline bar state","classification":"tactical","recorded_at":"2026-03-09T01:55:59.690Z","outcomes":[{"status":"success","agent":"pi-dash-app"}],"id":"mx-80aa98"}
