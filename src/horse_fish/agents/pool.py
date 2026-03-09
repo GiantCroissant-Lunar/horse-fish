@@ -7,11 +7,12 @@ import re
 import uuid
 from datetime import UTC, datetime
 
-from horse_fish.agents.prompt import build_prompt
+from horse_fish.agents.prompt import resolve_fix_prompt, resolve_task_prompt
 from horse_fish.agents.runtime import RUNTIME_REGISTRY
 from horse_fish.agents.tmux import TmuxManager
 from horse_fish.agents.worktree import WorktreeManager
 from horse_fish.models import AgentSlot, AgentState, SubtaskResult
+from horse_fish.observability.traces import Tracer
 from horse_fish.store.db import Store
 
 
@@ -24,11 +25,13 @@ class AgentPool:
         tmux: TmuxManager,
         worktrees: WorktreeManager,
         project_context: str | None = None,
+        tracer: Tracer | None = None,
     ) -> None:
         self._store = store
         self._tmux = tmux
         self._worktrees = worktrees
         self._project_context = project_context
+        self._tracer = tracer
 
     async def spawn(self, name: str, runtime: str, model: str, capability: str) -> AgentSlot:
         """Create a worktree, start a tmux session, persist the slot, and return it."""
@@ -87,18 +90,90 @@ class AgentPool:
 
         return slot
 
-    async def send_task(self, agent_id: str, prompt: str, task_id: str | None = None, raw: bool = False) -> None:
+    async def send_task(
+        self,
+        agent_id: str,
+        prompt: str,
+        task_id: str | None = None,
+        raw: bool = False,
+        prompt_kind: str = "task",
+    ) -> None:
         """Send a prompt to the agent's tmux session and mark it busy."""
         slot = self._get_slot(agent_id)
+        generation = None
         if raw:
             full_prompt = prompt
+            prompt_name = "raw"
+            prompt_source = "raw"
+            prompt_version = None
+            if self._tracer:
+                generation = self._tracer.generation(
+                    None,
+                    "agent.raw_prompt",
+                    input={"prompt": prompt},
+                    metadata={
+                        "agent_id": slot.id,
+                        "runtime": slot.runtime,
+                        "model": slot.model,
+                        "task_id": task_id,
+                        "prompt_name": prompt_name,
+                        "prompt_source": prompt_source,
+                        "prompt_version": prompt_version,
+                    },
+                    model=slot.model,
+                    model_parameters={"runtime": slot.runtime},
+                )
         else:
-            full_prompt = build_prompt(
-                task=prompt,
-                worktree_path=slot.worktree_path or "",
-                branch=slot.branch or "",
-                project_context=self._project_context,
-            )
+            if prompt_kind == "fix":
+                resolved_prompt = resolve_fix_prompt(
+                    self._tracer,
+                    gate_output=prompt,
+                    worktree_path=slot.worktree_path or "",
+                    branch=slot.branch or "",
+                )
+                generation_name = "agent.fix_prompt"
+                generation_input = {
+                    "gate_output": prompt,
+                    "worktree_path": slot.worktree_path or "",
+                    "branch": slot.branch or "",
+                }
+            else:
+                resolved_prompt = resolve_task_prompt(
+                    self._tracer,
+                    task=prompt,
+                    worktree_path=slot.worktree_path or "",
+                    branch=slot.branch or "",
+                    project_context=self._project_context,
+                )
+                generation_name = "agent.task_prompt"
+                generation_input = {
+                    "task": prompt,
+                    "worktree_path": slot.worktree_path or "",
+                    "branch": slot.branch or "",
+                    "project_context": bool(self._project_context),
+                }
+            full_prompt = resolved_prompt.compiled
+            prompt_name = resolved_prompt.name
+            prompt_source = resolved_prompt.source
+            prompt_version = resolved_prompt.version
+            if self._tracer:
+                generation = self._tracer.generation(
+                    None,
+                    generation_name,
+                    input=generation_input,
+                    metadata={
+                        "agent_id": slot.id,
+                        "runtime": slot.runtime,
+                        "model": slot.model,
+                        "task_id": task_id,
+                        "prompt_name": prompt_name,
+                        "prompt_source": prompt_source,
+                        "prompt_version": prompt_version,
+                    },
+                    model=slot.model,
+                    model_parameters={"runtime": slot.runtime},
+                    prompt=resolved_prompt.prompt_client,
+                )
         # Claude Code needs a longer delay between paste and Enter for large prompts
         enter_delay = 0.5 if slot.runtime == "claude" else 0.1
         await self._tmux.send_keys(slot.tmux_session, full_prompt, enter_delay=enter_delay)
@@ -106,6 +181,20 @@ class AgentPool:
             "UPDATE agents SET state = ?, task_id = ? WHERE id = ?",
             (AgentState.busy, task_id, agent_id),
         )
+        if self._tracer and generation:
+            self._tracer.end_span(
+                generation,
+                {"prompt_length": len(full_prompt)},
+                metadata={
+                    "agent_id": slot.id,
+                    "runtime": slot.runtime,
+                    "model": slot.model,
+                    "task_id": task_id,
+                    "prompt_name": prompt_name,
+                    "prompt_source": prompt_source,
+                    "prompt_version": prompt_version,
+                },
+            )
 
     async def check_status(self, agent_id: str) -> AgentState:
         """Return the agent's current state; mark dead if its tmux session is gone."""

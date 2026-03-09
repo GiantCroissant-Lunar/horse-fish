@@ -1153,6 +1153,72 @@ async def test_run_scores_trace_outcomes(mock_pool, mock_planner, mock_gates):
     assert "review_gate_pass_rate" in score_names
 
 
+@pytest.mark.asyncio
+async def test_run_emits_subtask_operation_spans(mock_pool, mock_planner, mock_gates):
+    """run() should emit subtask-level spans for dispatch, review, and merge."""
+    mock_planner.decompose.return_value = [Subtask(id="subtask-1", description="Task 1")]
+    slot = AgentSlot(
+        id="agent-1",
+        name="hf-subtask-1",
+        runtime="claude",
+        model="claude-sonnet-4.6",
+        capability="builder",
+        state=AgentState.busy,
+        worktree_path="/tmp/wt",
+    )
+    mock_pool.spawn.return_value = slot
+    mock_pool.send_task = AsyncMock()
+    mock_pool.check_status = AsyncMock(return_value=AgentState.dead)
+    mock_pool.collect_result = AsyncMock(
+        return_value=SubtaskResult(
+            subtask_id="subtask-1",
+            success=True,
+            output="Done",
+            diff="commit",
+            duration_seconds=10.0,
+        )
+    )
+    mock_pool._get_slot.return_value = slot
+    mock_gates.run_all = AsyncMock(
+        return_value=[GateResult(gate="compile", passed=True, output="ok", duration_seconds=1.0)]
+    )
+    mock_pool._worktrees.merge = AsyncMock(return_value=True)
+
+    mock_tracer = MagicMock()
+    mock_trace = MagicMock()
+    mock_trace.run_id = "run-1"
+    mock_trace.trace_id = "trace-1"
+    mock_trace.spans = []
+
+    def make_span(trace, name, metadata=None):
+        return MagicMock(name=f"span-{name}")
+
+    mock_tracer.trace_run.return_value = mock_trace
+    mock_tracer.span.side_effect = make_span
+
+    orchestrator = Orchestrator(
+        pool=mock_pool,
+        planner=mock_planner,
+        gates=mock_gates,
+        runtime="claude",
+        tracer=mock_tracer,
+    )
+
+    async def mock_sleep(seconds):
+        return None
+
+    with pytest.MonkeyPatch().context() as m:
+        m.setattr("horse_fish.orchestrator.engine.asyncio.sleep", mock_sleep)
+        run = await orchestrator.run("Build system")
+
+    assert run.state == RunState.completed
+    span_names = [call.args[1] for call in mock_tracer.span.call_args_list]
+    assert "subtask.dispatch" in span_names
+    assert "subtask.collect_result" in span_names
+    assert "subtask.review" in span_names
+    assert "subtask.merge" in span_names
+
+
 # --- Task 3: Stall Detection tests ---
 
 

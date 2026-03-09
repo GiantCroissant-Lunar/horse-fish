@@ -108,16 +108,18 @@ Current tracing covers:
 
 - One root trace per `hf run`
 - State spans for planning, executing, reviewing, and merging
+- Subtask operation spans for dispatch, result collection, review, merge queueing, and merge
 - Generation observations for `smart_planner.classify` and `planner.decompose`
+- Generation observations for agent task prompts, fix prompts, and raw prompt sends
 - Langfuse-managed text prompts with local fallbacks for planner classify/decompose prompts
+- Langfuse-managed text prompts with local fallbacks for agent task/fix prompts
 - Trace scores for run success, completed/failed subtasks, and review gate pass rate
 - Run-level metadata such as runtime, model, max agents, subtask counts, and final status
 
 Recommended next Langfuse improvements:
 
-- Move agent task/fix prompts into Langfuse Prompt Management and link prompt versions to traces
 - Add more scores around retries, merge conflicts, and planner quality
-- Add finer-grained agent/subtask spans around dispatch, retries, and gate feedback loops
+- Add finer-grained spans around retries, stall recovery, and agent readiness
 
 ## Project Structure
 

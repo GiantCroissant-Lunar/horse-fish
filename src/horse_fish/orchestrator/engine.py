@@ -77,13 +77,31 @@ class Orchestrator:
         self._concurrency_limits = concurrency_limits or {}
         self._store = store
         self._active_trace = None
-
         self._handlers: dict[RunState, _Handler] = {
             RunState.planning: self._plan,
             RunState.executing: self._execute,
             RunState.reviewing: self._review,
             RunState.merging: self._merge,
         }
+
+    def _subtask_span(
+        self,
+        name: str,
+        subtask: Subtask,
+        **metadata,
+    ):
+        """Create a best-effort span for a specific subtask operation."""
+        if not self._tracer or not self._active_trace:
+            return None
+        base_metadata = {
+            "subtask_id": subtask.id,
+            "description": subtask.description,
+            "agent_id": subtask.agent,
+            "retry_count": subtask.retry_count,
+            "gate_retry_count": subtask.gate_retry_count,
+        }
+        base_metadata.update(metadata)
+        return self._tracer.span(self._active_trace, name, base_metadata)
 
     def _persist_run(self, run: Run) -> None:
         """Persist run state to SQLite."""
@@ -337,6 +355,12 @@ class Orchestrator:
                     continue
 
                 try:
+                    dispatch_span = self._subtask_span(
+                        "subtask.dispatch",
+                        subtask,
+                        deps=subtask.deps,
+                        files_hint=subtask.files_hint,
+                    )
                     # Use selector if available, otherwise spawn directly
                     if self._selector:
                         available_agents = [a for a in self._pool.list_agents() if a.state == AgentState.idle]
@@ -359,10 +383,24 @@ class Orchestrator:
                     agent_map[subtask.id] = slot.id
                     active_count += 1
                     self._persist_subtask(subtask, run.id)
+                    if dispatch_span:
+                        self._tracer.end_span(
+                            dispatch_span,
+                            {"state": subtask.state.value},
+                            metadata={"selected_agent": slot.id, "runtime": slot.runtime, "model": slot.model},
+                        )
                 except Exception as exc:
                     logger.error("Failed to dispatch subtask %s: %s", subtask.id, exc)
                     subtask.state = SubtaskState.failed
                     self._persist_subtask(subtask, run.id)
+                    if self._tracer and dispatch_span:
+                        self._tracer.end_span(
+                            dispatch_span,
+                            {"error": str(exc)},
+                            metadata={"state": subtask.state.value},
+                            level="ERROR",
+                            status_message=str(exc),
+                        )
 
             # Check if all subtasks are terminal
             if all(s.state in (SubtaskState.done, SubtaskState.failed) for s in run.subtasks):
@@ -388,16 +426,25 @@ class Orchestrator:
                 status = await self._pool.check_status(agent_id)
                 if status.value == "dead":
                     # Agent died — check if it produced output
+                    collect_span = self._subtask_span("subtask.collect_result", subtask, status=status.value)
                     result = await self._pool.collect_result(agent_id)
                     subtask.result = result
                     self._stamp_provenance(result, run, agent_id)
                     subtask.state = SubtaskState.done if result.success else SubtaskState.failed
                     self._persist_subtask(subtask, run.id)
                     active_count -= 1
+                    if collect_span:
+                        self._tracer.end_span(
+                            collect_span,
+                            {"success": result.success, "has_diff": bool(result.diff)},
+                            metadata={"duration_seconds": result.duration_seconds},
+                            level="DEFAULT" if result.success else "WARNING",
+                        )
                     continue
 
                 # Check for new commits in worktree (primary completion signal)
                 try:
+                    collect_span = self._subtask_span("subtask.poll_result", subtask, status=status.value)
                     result = await self._pool.collect_result(agent_id)
                     if result.diff:
                         subtask.result = result
@@ -406,6 +453,14 @@ class Orchestrator:
                         subtask.last_activity_at = datetime.now(UTC)
                         self._persist_subtask(subtask, run.id)
                         active_count -= 1
+                        if collect_span:
+                            self._tracer.end_span(
+                                collect_span,
+                                {"success": True, "has_diff": True},
+                                metadata={"duration_seconds": result.duration_seconds},
+                            )
+                    elif collect_span:
+                        self._tracer.end_span(collect_span, {"success": False, "has_diff": False})
                 except Exception:
                     pass
 
@@ -439,6 +494,7 @@ class Orchestrator:
                 continue
             reviewed_subtasks += 1
 
+            review_span = self._subtask_span("subtask.review", subtask)
             try:
                 slot = self._pool._get_slot(subtask.agent)
                 if not slot.worktree_path:
@@ -452,6 +508,12 @@ class Orchestrator:
                 results = await self._gates.run_all(slot.worktree_path)
                 if self._gates.all_passed(results):
                     passed_subtasks += 1
+                    if review_span:
+                        self._tracer.end_span(
+                            review_span,
+                            {"passed": True},
+                            metadata={"gate_count": len(results)},
+                        )
                     continue
 
                 # Gates failed — try retry
@@ -470,23 +532,30 @@ class Orchestrator:
                             subtask.state = SubtaskState.failed
                             self._persist_subtask(subtask, run.id)
                             all_passed = False
+                            if review_span:
+                                self._tracer.end_span(
+                                    review_span,
+                                    {"error": str(exc)},
+                                    metadata={"passed": False},
+                                    level="ERROR",
+                                    status_message=str(exc),
+                                )
                             continue
 
-                    # Send fix prompt to agent
-                    from horse_fish.agents.prompt import build_fix_prompt
-
-                    fix_prompt = build_fix_prompt(
-                        gate_output=gate_output,
-                        worktree_path=slot.worktree_path,
-                        branch=slot.branch or "",
-                    )
-                    await self._pool.send_task(subtask.agent, fix_prompt, raw=True)
+                    await self._pool.send_task(subtask.agent, gate_output, prompt_kind="fix")
                     subtask.state = SubtaskState.running
                     subtask.gate_retry_count += 1
                     subtask.last_activity_at = datetime.now(UTC)
                     self._persist_subtask(subtask, run.id)
                     needs_re_execute = True
                     retried_subtasks += 1
+                    if review_span:
+                        self._tracer.end_span(
+                            review_span,
+                            {"passed": False, "retrying": True},
+                            metadata={"gate_output": gate_output},
+                            level="WARNING",
+                        )
                     logger.info(
                         "Sent fix prompt to agent for subtask %s (gate retry %d/%d)",
                         subtask.id,
@@ -500,6 +569,13 @@ class Orchestrator:
                 self._persist_subtask(subtask, run.id)
                 all_passed = False
                 failed_subtasks += 1
+                if review_span:
+                    self._tracer.end_span(
+                        review_span,
+                        {"passed": False, "retrying": False},
+                        metadata={"gate_output": gate_output},
+                        level="ERROR",
+                    )
 
             except KeyError as exc:
                 logger.error("Review failed for subtask %s — agent slot not found: %s", subtask.id, exc)
@@ -512,6 +588,14 @@ class Orchestrator:
                 self._persist_subtask(subtask, run.id)
                 all_passed = False
                 failed_subtasks += 1
+                if self._tracer and review_span:
+                    self._tracer.end_span(
+                        review_span,
+                        {"error": str(exc)},
+                        metadata={"passed": False},
+                        level="ERROR",
+                        status_message=str(exc),
+                    )
 
         if self._tracer and self._active_trace and reviewed_subtasks:
             self._tracer.score_trace(
@@ -548,7 +632,10 @@ class Orchestrator:
                 if subtask.state != SubtaskState.done or not subtask.agent:
                     continue
                 slot = self._pool._get_slot(subtask.agent)
+                merge_span = self._subtask_span("subtask.merge_queue", subtask, branch=slot.branch)
                 await self._merge_queue.enqueue(subtask.id, slot.name, slot.branch)
+                if merge_span:
+                    self._tracer.end_span(merge_span, {"enqueued": True}, metadata={"agent_name": slot.name})
 
             results = await self._merge_queue.process()
             for result in results:
@@ -562,18 +649,36 @@ class Orchestrator:
                 if subtask.state != SubtaskState.done or not subtask.agent:
                     continue
 
+                merge_span = None
                 try:
                     slot = self._pool._get_slot(subtask.agent)
+                    merge_span = self._subtask_span("subtask.merge", subtask, branch=slot.branch)
                     success = await self._pool._worktrees.merge(slot.name)
                     if not success:
                         logger.error("Merge conflict for subtask %s", subtask.id)
                         subtask.state = SubtaskState.failed
                         run.state = RunState.failed
+                        if merge_span:
+                            self._tracer.end_span(
+                                merge_span,
+                                {"success": False},
+                                level="ERROR",
+                                status_message="merge conflict",
+                            )
                         return run
+                    if merge_span:
+                        self._tracer.end_span(merge_span, {"success": True})
                 except Exception as exc:
                     logger.error("Merge failed for subtask %s: %s", subtask.id, exc)
                     subtask.state = SubtaskState.failed
                     run.state = RunState.failed
+                    if self._tracer and merge_span:
+                        self._tracer.end_span(
+                            merge_span,
+                            {"error": str(exc)},
+                            level="ERROR",
+                            status_message=str(exc),
+                        )
                     return run
 
         run.state = RunState.completed

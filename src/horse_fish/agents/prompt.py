@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from horse_fish.observability.prompts import ResolvedPrompt, resolve_text_prompt
+from horse_fish.observability.traces import Tracer
+
 PROMPT_TEMPLATE = """You are an agent in the horse-fish swarm working in an isolated git worktree.
 
 ## Worktree Information
@@ -22,6 +25,8 @@ You MUST complete ALL of the following before committing:
 6. Commit your changes: `git add --all && git commit -m "description"`.
 7. Do not modify files outside your assigned scope.
 """
+
+TASK_PROMPT_NAME = "agent-task-instructions"
 
 
 def build_prompt(
@@ -54,6 +59,30 @@ def build_prompt(
     )
 
 
+def resolve_task_prompt(
+    tracer: Tracer | None,
+    task: str,
+    worktree_path: str,
+    branch: str,
+    project_context: str | None = None,
+) -> ResolvedPrompt:
+    """Resolve the agent task prompt from Langfuse or a local fallback."""
+    if project_context:
+        project_context_section = f"## Project Conventions\n{project_context}\n\n"
+    else:
+        project_context_section = ""
+
+    return resolve_text_prompt(
+        tracer,
+        TASK_PROMPT_NAME,
+        PROMPT_TEMPLATE,
+        task=task,
+        worktree_path=worktree_path,
+        branch=branch,
+        project_context_section=project_context_section,
+    )
+
+
 FIX_PROMPT_TEMPLATE = """Your previous changes failed the following quality gates:
 
 {gate_output}
@@ -71,6 +100,8 @@ FIX_PROMPT_TEMPLATE = """Your previous changes failed the following quality gate
 4. Commit your fixes when done.
 """
 
+FIX_PROMPT_NAME = "agent-fix-instructions"
+
 
 def build_fix_prompt(
     gate_output: str,
@@ -79,6 +110,23 @@ def build_fix_prompt(
 ) -> str:
     """Build a prompt telling the agent to fix gate failures."""
     return FIX_PROMPT_TEMPLATE.format(
+        gate_output=gate_output,
+        worktree_path=worktree_path,
+        branch=branch,
+    )
+
+
+def resolve_fix_prompt(
+    tracer: Tracer | None,
+    gate_output: str,
+    worktree_path: str,
+    branch: str,
+) -> ResolvedPrompt:
+    """Resolve the agent fix prompt from Langfuse or a local fallback."""
+    return resolve_text_prompt(
+        tracer,
+        FIX_PROMPT_NAME,
+        FIX_PROMPT_TEMPLATE,
         gate_output=gate_output,
         worktree_path=worktree_path,
         branch=branch,

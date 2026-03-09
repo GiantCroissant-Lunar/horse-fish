@@ -26,8 +26,8 @@ def make_worktree_info(name: str = "agent-1") -> WorktreeInfo:
     return WorktreeInfo(path=f"/tmp/worktrees/{name}", branch=f"horse-fish/{name}", name=name)
 
 
-def make_pool(store: Store, tmux: MagicMock, worktrees: MagicMock) -> AgentPool:
-    return AgentPool(store=store, tmux=tmux, worktrees=worktrees)
+def make_pool(store: Store, tmux: MagicMock, worktrees: MagicMock, tracer: MagicMock | None = None) -> AgentPool:
+    return AgentPool(store=store, tmux=tmux, worktrees=worktrees, tracer=tracer)
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +263,55 @@ async def test_send_task_persists_task_id() -> None:
     agents = pool.list_agents()
     assert agents[0].task_id == task_id
     assert agents[0].state == AgentState.busy
+
+
+@pytest.mark.asyncio
+async def test_send_task_traces_agent_prompt_generation() -> None:
+    """Task prompts should emit a Langfuse generation when tracer is configured."""
+    store = make_store()
+    tmux = MagicMock()
+    tmux.spawn = AsyncMock(return_value=9)
+    tmux.send_keys = AsyncMock()
+    tmux.capture_pane = AsyncMock(return_value="Ready\n> \n")
+    worktrees = MagicMock()
+    worktrees.create = AsyncMock(return_value=make_worktree_info())
+    tracer = MagicMock()
+    tracer.get_prompt.return_value = None
+    tracer.generation.return_value = MagicMock()
+
+    pool = make_pool(store, tmux, worktrees, tracer=tracer)
+    slot = await pool.spawn("agent-1", "copilot", "gpt-5.4", "builder")
+
+    await pool.send_task(slot.id, "implement feature X", task_id="subtask-1")
+
+    tracer.generation.assert_called_once()
+    assert tracer.generation.call_args.args[1] == "agent.task_prompt"
+    tracer.end_span.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_send_task_fix_prompt_uses_fix_template() -> None:
+    """Fix prompts should resolve through the Langfuse-managed fix prompt path."""
+    store = make_store()
+    tmux = MagicMock()
+    tmux.spawn = AsyncMock(return_value=9)
+    tmux.send_keys = AsyncMock()
+    tmux.capture_pane = AsyncMock(return_value="Ready\n> \n")
+    worktrees = MagicMock()
+    worktrees.create = AsyncMock(return_value=make_worktree_info())
+    tracer = MagicMock()
+    tracer.get_prompt.return_value = None
+    tracer.generation.return_value = MagicMock()
+
+    pool = make_pool(store, tmux, worktrees, tracer=tracer)
+    slot = await pool.spawn("agent-1", "copilot", "gpt-5.4", "builder")
+
+    await pool.send_task(slot.id, "ruff-check: F401 unused import", prompt_kind="fix")
+
+    sent_prompt = tmux.send_keys.call_args[0][1]
+    assert "Your previous changes failed the following quality gates" in sent_prompt
+    assert "F401 unused import" in sent_prompt
+    assert tracer.generation.call_args.args[1] == "agent.fix_prompt"
 
 
 @pytest.mark.asyncio

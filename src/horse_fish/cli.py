@@ -43,8 +43,8 @@ def _init_components(runtime: str, model: str | None, max_agents: int, planner_r
     worktrees = WorktreeManager(repo_root)
     claude_md = Path.cwd() / "CLAUDE.md"
     project_context = claude_md.read_text() if claude_md.exists() else None
-    pool = AgentPool(store, tmux, worktrees, project_context=project_context)
     tracer = Tracer()
+    pool = AgentPool(store, tmux, worktrees, project_context=project_context, tracer=tracer)
     planner = Planner(runtime=planner_runtime or runtime, model=model if not planner_runtime else None, tracer=tracer)
     # Use user-specified model for agents; only fall back to planner default when no separate planner runtime
     effective_model = model or (planner.model if not planner_runtime else "")
