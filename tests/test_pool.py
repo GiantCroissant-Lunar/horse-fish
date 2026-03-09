@@ -537,6 +537,44 @@ async def test_collect_result_traces_execution_probe() -> None:
 
 
 @pytest.mark.asyncio
+async def test_collect_result_emits_runtime_tool_and_prompt_spans() -> None:
+    """collect_result should emit runtime-derived tool and prompt observations once."""
+    store = make_store()
+    tmux = MagicMock()
+    tmux.spawn = AsyncMock(return_value=7)
+    tmux.capture_pane = AsyncMock(
+        side_effect=[
+            "Ready\n❯ \n",
+            "⏺ Bash(git status --short)\nConfirm to bypass permissions?\n",
+            "⏺ Bash(git status --short)\nConfirm to bypass permissions?\n",
+        ]
+    )
+    worktrees = MagicMock()
+    worktrees.create = AsyncMock(return_value=make_worktree_info())
+    worktrees.get_diff = AsyncMock(return_value="")
+    tracer = MagicMock()
+    tracer.span.side_effect = [
+        MagicMock(name="spawn-span"),
+        MagicMock(name="ready-span"),
+        MagicMock(name="result-span-1"),
+        MagicMock(name="runtime-tool-span"),
+        MagicMock(name="runtime-prompt-span"),
+        MagicMock(name="result-span-2"),
+    ]
+
+    pool = make_pool(store, tmux, worktrees, tracer=tracer)
+    slot = await pool.spawn("agent-1", "claude", "model", "builder")
+
+    await pool.collect_result(slot.id)
+    await pool.collect_result(slot.id)
+
+    span_names = [call.args[1] for call in tracer.span.call_args_list]
+    assert span_names.count("agent.runtime_tool") == 1
+    assert span_names.count("agent.runtime_prompt") == 1
+    assert span_names.count("agent.collect_result") == 2
+
+
+@pytest.mark.asyncio
 async def test_collect_result_marks_not_successful_when_pane_empty() -> None:
     store = make_store()
     tmux = MagicMock()

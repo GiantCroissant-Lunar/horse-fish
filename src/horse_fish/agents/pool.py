@@ -8,7 +8,7 @@ import uuid
 from datetime import UTC, datetime
 
 from horse_fish.agents.prompt import resolve_fix_prompt, resolve_task_prompt
-from horse_fish.agents.runtime import RUNTIME_REGISTRY
+from horse_fish.agents.runtime import RUNTIME_REGISTRY, extract_runtime_observations
 from horse_fish.agents.tmux import TmuxManager
 from horse_fish.agents.worktree import WorktreeManager
 from horse_fish.models import AgentSlot, AgentState, SubtaskResult
@@ -32,12 +32,40 @@ class AgentPool:
         self._worktrees = worktrees
         self._project_context = project_context
         self._tracer = tracer
+        self._seen_runtime_observations: dict[str, set[tuple[str, str, str]]] = {}
 
     def _trace_span(self, name: str, **metadata):
         """Create a best-effort span for agent lifecycle operations."""
         if not self._tracer:
             return None
         return self._tracer.span(None, name, metadata)
+
+    def _emit_runtime_output_observations(self, slot: AgentSlot, output: str) -> None:
+        """Emit best-effort runtime tool/prompt observations from pane output."""
+        if not self._tracer or not output:
+            return
+
+        seen = self._seen_runtime_observations.setdefault(slot.id, set())
+        for observation in extract_runtime_observations(slot.runtime, output):
+            key = (observation.kind, observation.name, observation.excerpt)
+            if key in seen:
+                continue
+            seen.add(key)
+            span = self._trace_span(
+                f"agent.runtime_{observation.kind}",
+                agent_id=slot.id,
+                agent_name=slot.name,
+                runtime=slot.runtime,
+                model=slot.model,
+                task_id=slot.task_id,
+                observation_name=observation.name,
+            )
+            if self._tracer and span:
+                self._tracer.end_span(
+                    span,
+                    {"detected": True},
+                    metadata={"excerpt": observation.excerpt},
+                )
 
     async def spawn(self, name: str, runtime: str, model: str, capability: str) -> AgentSlot:
         """Create a worktree, start a tmux session, persist the slot, and return it."""
@@ -112,6 +140,7 @@ class AgentPool:
                         "branch": slot.branch,
                     },
                 )
+            self._seen_runtime_observations[slot.id] = set()
 
             return slot
         except Exception as exc:
@@ -310,6 +339,7 @@ class AgentPool:
                     {"respawned": True},
                     metadata={"pid": pid, "tmux_session": slot.tmux_session},
                 )
+            self._seen_runtime_observations[slot.id] = set()
             return slot
         except Exception as exc:
             if self._tracer and respawn_span:
@@ -338,6 +368,7 @@ class AgentPool:
             output = await self._tmux.capture_pane(slot.tmux_session) or ""
             diff = await self._worktrees.get_diff(slot.name)
             duration = (datetime.now(UTC) - started_at).total_seconds()
+            self._emit_runtime_output_observations(slot, output)
             result = SubtaskResult(
                 subtask_id=slot.task_id or agent_id,
                 success=bool(output),
@@ -378,6 +409,7 @@ class AgentPool:
         await self._tmux.kill_session(slot.tmux_session)
         await self._worktrees.remove(slot.name)
         self._store.execute("UPDATE agents SET state = ? WHERE id = ?", (AgentState.dead, agent_id))
+        self._seen_runtime_observations.pop(agent_id, None)
 
     def list_agents(self) -> list[AgentSlot]:
         """Return all persisted agent slots."""
