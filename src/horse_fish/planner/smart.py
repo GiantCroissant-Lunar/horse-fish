@@ -13,10 +13,15 @@ from horse_fish.planner.decompose import Planner
 logger = logging.getLogger(__name__)
 
 _CLASSIFY_PROMPT = """\
-Estimate the complexity of this coding task:
-- SOLO: Single file or tightly coupled change. One agent handles everything.
-- TRIO: 2-4 files across 1-2 components. Needs minimal decomposition.
-- SQUAD: 5+ files, multiple components, needs parallel work.
+Estimate the complexity of this coding task. Default to SOLO unless clearly wrong.
+
+- SOLO: One feature, one bug fix, one refactor. Even if it touches 2-3 files in the same component. \
+A single agent handles everything. Most tasks are SOLO.
+- TRIO: Truly independent changes across 2-3 separate components that benefit from parallel work. \
+NOT just "multiple files" — only if the changes have zero coupling.
+- SQUAD: 5+ independent components, large-scale refactor across the entire codebase.
+
+When in doubt, choose SOLO. Over-decomposition wastes more time than under-decomposition.
 
 {lessons}
 

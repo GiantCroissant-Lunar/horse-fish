@@ -309,3 +309,15 @@ async def test_lessons_injected():
     await smart.decompose("Add version string")
 
     lesson_store.get_lessons_for_task.assert_called_once()
+
+
+# --- Classify prompt bias ---
+
+
+def test_classify_prompt_contains_solo_bias():
+    """Classify prompt should instruct to default to SOLO."""
+    from horse_fish.planner.smart import _CLASSIFY_PROMPT
+
+    assert "Default to SOLO" in _CLASSIFY_PROMPT
+    assert "Most tasks are SOLO" in _CLASSIFY_PROMPT
+    assert "When in doubt, choose SOLO" in _CLASSIFY_PROMPT
