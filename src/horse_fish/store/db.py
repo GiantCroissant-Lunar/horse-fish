@@ -74,6 +74,24 @@ MIGRATIONS: list[tuple[int, str]] = [
         CREATE INDEX IF NOT EXISTS idx_lessons_pattern ON lessons(pattern);
         """,
     ),
+    (
+        3,
+        """
+        -- Recreate subtasks with full schema (pre-dashboard table lacked columns)
+        DROP TABLE IF EXISTS subtasks;
+        CREATE TABLE subtasks (
+            id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            description TEXT NOT NULL,
+            state TEXT NOT NULL,
+            agent_id TEXT,
+            deps TEXT,
+            retry_count INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT '',
+            FOREIGN KEY (run_id) REFERENCES runs(id)
+        );
+        """,
+    ),
 ]
 
 

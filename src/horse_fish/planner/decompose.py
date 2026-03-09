@@ -37,6 +37,7 @@ _CLI_COMMANDS: dict[str, list[str]] = {
     "copilot": ["copilot", "--print", "--model", "{model}", "{prompt}"],
     "pi": ["pi", "--print", "--provider", "dashscope", "--model", "{model}", "{prompt}"],
     "opencode": ["opencode", "--print", "-m", "{model}", "{prompt}"],
+    "droid": ["droid", "exec", "-m", "{model}", "{prompt}"],
 }
 
 _DEFAULT_MODELS: dict[str, str] = {
@@ -44,6 +45,7 @@ _DEFAULT_MODELS: dict[str, str] = {
     "copilot": "gpt-4o",
     "pi": "qwen3.5-plus",
     "opencode": "qwen3.5-plus",
+    "droid": "glm-4.7",
 }
 
 

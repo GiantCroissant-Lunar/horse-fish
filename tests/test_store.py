@@ -28,7 +28,7 @@ def test_migrate_idempotent(tmp_path: Path) -> None:
     store.migrate()  # second call should be a no-op
     row = store.fetchone("SELECT MAX(version) AS v FROM schema_version")
     assert row is not None
-    assert row["v"] == 2
+    assert row["v"] == 3
     store.close()
 
 
