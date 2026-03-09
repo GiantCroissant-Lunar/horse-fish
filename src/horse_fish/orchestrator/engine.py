@@ -127,7 +127,7 @@ class Orchestrator:
                     self._cognee_memory.ingest_run_result(run, subtask_results),
                     timeout=120,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("Cognee ingestion timed out after 120s")
             except Exception as exc:
                 logger.warning("Failed to ingest run into Cognee: %s", exc)

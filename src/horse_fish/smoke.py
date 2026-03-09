@@ -120,7 +120,7 @@ async def verify_cognee(cognee_memory) -> tuple[bool, str]:
         if hits:
             return True, f"found {len(hits)} hits"
         return False, "no hits found"
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return False, "skipped — cognee search timed out"
     except Exception as exc:
         return False, f"error: {exc}"
