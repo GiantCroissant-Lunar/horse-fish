@@ -38,6 +38,7 @@ def _init_components(runtime: str, model: str | None, max_agents: int):
     project_context = claude_md.read_text() if claude_md.exists() else None
     pool = AgentPool(store, tmux, worktrees, project_context=project_context)
     planner = Planner(runtime=runtime, model=model)
+    effective_model = planner.model  # resolved default if model was None
     gates = ValidationGates()
     memory = MemoryStore()
     lesson_store = LessonStore(store)
@@ -47,7 +48,7 @@ def _init_components(runtime: str, model: str | None, max_agents: int):
         planner=planner,
         gates=gates,
         runtime=runtime,
-        model=model or "",
+        model=effective_model,
         max_agents=max_agents,
         memory=memory,
         lesson_store=lesson_store,

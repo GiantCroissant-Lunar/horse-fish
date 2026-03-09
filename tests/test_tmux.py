@@ -135,6 +135,6 @@ def test_runtime_registry_contains_supported_runtimes() -> None:
     assert set(RUNTIME_REGISTRY) == {"claude", "copilot", "pi", "opencode"}
     assert RUNTIME_REGISTRY["claude"].build_spawn_command("sonnet") == "claude --model sonnet"
     assert RUNTIME_REGISTRY["copilot"].build_spawn_command("gpt-5.4") == "copilot --model gpt-5.4 --allow-all-tools"
-    assert RUNTIME_REGISTRY["pi"].build_spawn_command("kimi-for-coding") == "pi --model kimi-for-coding"
+    assert RUNTIME_REGISTRY["pi"].build_spawn_command("qwen3.5-plus") == "pi --provider dashscope --model qwen3.5-plus"
     assert RUNTIME_REGISTRY["opencode"].build_spawn_command("qwen3.5-plus") == "opencode -m qwen3.5-plus"
     assert RUNTIME_REGISTRY["claude"].build_env() == {}

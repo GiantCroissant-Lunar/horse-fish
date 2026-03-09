@@ -82,7 +82,7 @@ class PiRuntime:
     ready_timeout_seconds: ClassVar[int] = 45
 
     def build_spawn_command(self, model: str) -> str:
-        return f"pi --model {shlex.quote(model)}"
+        return f"pi --provider dashscope --model {shlex.quote(model)}"
 
     def build_env(self) -> dict[str, str]:
         api_key = os.environ.get("DASHSCOPE_API_KEY") or _get_tmux_env("DASHSCOPE_API_KEY")

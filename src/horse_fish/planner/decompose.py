@@ -35,14 +35,14 @@ Task: {task}
 _CLI_COMMANDS: dict[str, list[str]] = {
     "claude": ["claude", "--print", "-m", "{model}", "{prompt}"],
     "copilot": ["copilot", "--print", "--model", "{model}", "{prompt}"],
-    "pi": ["pi", "--print", "--model", "{model}", "{prompt}"],
+    "pi": ["pi", "--print", "--provider", "dashscope", "--model", "{model}", "{prompt}"],
     "opencode": ["opencode", "--print", "-m", "{model}", "{prompt}"],
 }
 
 _DEFAULT_MODELS: dict[str, str] = {
     "claude": "claude-sonnet-4-6",
     "copilot": "gpt-4o",
-    "pi": "kimi-for-coding",
+    "pi": "qwen3.5-plus",
     "opencode": "qwen3.5-plus",
 }
 
