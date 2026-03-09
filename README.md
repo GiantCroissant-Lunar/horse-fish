@@ -121,6 +121,11 @@ Current tracing covers:
 - Trace scores for run success, completed/failed subtasks, review gate pass rate, retries, and merge conflicts
 - Run-level metadata such as runtime, model, max agents, subtask counts, and final status
 
+Current assessment:
+
+- The Langfuse integration is now sufficient for normal operational debugging of `hf run`: planner calls, agent prompt sends, orchestrator lifecycle, retry paths, merge conflicts, and runtime-observed tool/prompt activity are all visible at the trace level
+- The remaining gaps are higher-order improvements, not missing baseline coverage: better quality/evaluation signals and replacing regex-derived runtime observations with structured runtime-native events where possible
+
 Recommended next Langfuse improvements:
 
 - Add planner-quality scores and evaluator feedback loops
