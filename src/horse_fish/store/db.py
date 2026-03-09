@@ -77,8 +77,19 @@ MIGRATIONS: list[tuple[int, str]] = [
     (
         3,
         """
-        -- Recreate subtasks with full schema (pre-dashboard table lacked columns)
+        -- Recreate runs and subtasks with full schema (pre-dashboard tables lacked columns)
         DROP TABLE IF EXISTS subtasks;
+        DROP TABLE IF EXISTS runs;
+
+        CREATE TABLE runs (
+            id TEXT PRIMARY KEY,
+            task TEXT NOT NULL,
+            state TEXT NOT NULL,
+            complexity TEXT,
+            created_at TEXT NOT NULL DEFAULT '',
+            completed_at TEXT
+        );
+
         CREATE TABLE subtasks (
             id TEXT PRIMARY KEY,
             run_id TEXT NOT NULL,

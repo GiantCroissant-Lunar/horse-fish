@@ -26,7 +26,7 @@ except ImportError:
 DB_PATH = ".horse-fish/state.db"
 
 
-def _init_components(runtime: str, model: str | None, max_agents: int):
+def _init_components(runtime: str, model: str | None, max_agents: int, planner_runtime: str | None = None):
     """Initialize all components needed for orchestration."""
     repo_root = str(Path.cwd())
     Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
@@ -37,7 +37,7 @@ def _init_components(runtime: str, model: str | None, max_agents: int):
     claude_md = Path.cwd() / "CLAUDE.md"
     project_context = claude_md.read_text() if claude_md.exists() else None
     pool = AgentPool(store, tmux, worktrees, project_context=project_context)
-    planner = Planner(runtime=runtime, model=model)
+    planner = Planner(runtime=planner_runtime or runtime, model=model if not planner_runtime else None)
     effective_model = planner.model  # resolved default if model was None
     gates = ValidationGates()
     memory = MemoryStore()
@@ -69,9 +69,10 @@ def main():
 @click.option("--runtime", default="claude", help="Default runtime for agents")
 @click.option("--model", default=None, help="Model override")
 @click.option("--max-agents", default=3, type=int, help="Max concurrent agents")
-def run(task: str, runtime: str, model: str | None, max_agents: int):
+@click.option("--planner-runtime", default=None, help="Runtime for planning (defaults to --runtime)")
+def run(task: str, runtime: str, model: str | None, max_agents: int, planner_runtime: str | None):
     """Submit a task to the swarm."""
-    orchestrator, store, _pool = _init_components(runtime, model, max_agents)
+    orchestrator, store, _pool = _init_components(runtime, model, max_agents, planner_runtime)
     try:
         result = asyncio.run(orchestrator.run(task))
         click.echo(f"Run {result.id}: {result.state}")

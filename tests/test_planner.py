@@ -77,10 +77,11 @@ def test_build_prompt_instructs_json():
 @pytest.mark.parametrize(
     "runtime,expected_parts",
     [
-        ("claude", ["claude", "--print", "-m"]),
+        ("claude", ["claude", "--print", "--model"]),
         ("copilot", ["copilot", "--print", "--model"]),
         ("pi", ["pi", "--print", "--model"]),
         ("opencode", ["opencode", "--print", "-m"]),
+        ("droid", ["droid", "exec", "-m"]),
     ],
 )
 def test_build_command_includes_runtime_flags(runtime: str, expected_parts: list[str]):

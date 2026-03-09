@@ -132,7 +132,7 @@ def test_run_with_options(mock_init_components, runner, mock_run):
     )
 
     assert result.exit_code == 0
-    mock_init_components.assert_called_once_with("pi", "custom-model", 5)
+    mock_init_components.assert_called_once_with("pi", "custom-model", 5, None)
     mock_orchestrator.run.assert_called_once_with("custom task")
 
 

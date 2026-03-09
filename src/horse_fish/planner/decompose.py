@@ -33,7 +33,7 @@ Task: {task}
 """
 
 _CLI_COMMANDS: dict[str, list[str]] = {
-    "claude": ["claude", "--print", "-m", "{model}", "{prompt}"],
+    "claude": ["claude", "--print", "--model", "{model}", "{prompt}"],
     "copilot": ["copilot", "--print", "--model", "{model}", "{prompt}"],
     "pi": ["pi", "--print", "--provider", "dashscope", "--model", "{model}", "{prompt}"],
     "opencode": ["opencode", "--print", "-m", "{model}", "{prompt}"],
