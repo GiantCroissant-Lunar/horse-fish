@@ -155,8 +155,9 @@ class Orchestrator:
         result.completed_at = datetime.now(UTC)
 
     async def _check_stalls(self, run: Run, agent_map: dict[str, str]) -> int:
-        """Check for stalled agents. Returns count of retried subtasks."""
+        """Check for stalled agents. Returns count of subtasks no longer running (retried + failed)."""
         retried = 0
+        failed = 0
         now = datetime.now(UTC)
 
         for subtask in run.subtasks:
@@ -189,9 +190,12 @@ class Orchestrator:
                 logger.info("Retrying subtask %s (attempt %d/%d)", subtask.id, subtask.retry_count, subtask.max_retries)
             else:
                 subtask.state = SubtaskState.failed
+                if subtask.id in agent_map:
+                    del agent_map[subtask.id]
+                failed += 1
                 logger.error("Subtask %s failed after %d retries", subtask.id, subtask.max_retries)
 
-        return retried
+        return retried + failed
 
     async def _plan(self, run: Run) -> Run:
         """Decompose the task into subtasks via the Planner."""
@@ -304,7 +308,8 @@ class Orchestrator:
                     pass
 
             # Check for stalled agents and retry
-            await self._check_stalls(run, agent_map)
+            retried_count = await self._check_stalls(run, agent_map)
+            active_count -= retried_count
 
         # Any failures?
         if any(s.state == SubtaskState.failed for s in run.subtasks):
