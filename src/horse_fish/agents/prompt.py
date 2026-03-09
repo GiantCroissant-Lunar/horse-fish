@@ -14,9 +14,10 @@ PROMPT_TEMPLATE = """You are an agent in the horse-fish swarm working in an isol
 
 ## Rules
 1. Run pytest to verify your changes pass tests.
-2. Commit your changes when done.
-3. Stay focused on the task at hand.
-4. Do not modify files outside your assigned scope.
+2. Run `ruff check --fix src/ tests/` and `ruff format src/ tests/` before committing.
+3. Commit your changes when done.
+4. Stay focused on the task at hand.
+5. Do not modify files outside your assigned scope.
 """
 
 

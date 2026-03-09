@@ -60,3 +60,10 @@ def test_build_prompt_includes_rules() -> None:
 
     assert "pytest" in result
     assert "Commit" in result
+
+
+def test_build_prompt_includes_ruff_instruction() -> None:
+    """Verify ruff check --fix instruction appears in rules."""
+    result = build_prompt(task="test", worktree_path="/tmp", branch="main")
+    assert "ruff check --fix" in result
+    assert "ruff format" in result
