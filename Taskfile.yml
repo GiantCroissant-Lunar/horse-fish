@@ -1,0 +1,108 @@
+version: "3"
+
+vars:
+  PYTHON: python
+  SRC: src/ tests/
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  setup:
+    desc: Install all dependencies (dev + optional)
+    cmds:
+      - pip install -e ".[dev,memory,dashboard,observability]"
+      - pre-commit install
+
+  setup:dev:
+    desc: Install dev dependencies only
+    cmds:
+      - pip install -e ".[dev]"
+      - pre-commit install
+
+  env:
+    desc: Load secrets into shell and tmux
+    cmds:
+      - source infra/setup-env.sh
+
+  test:
+    desc: Run test suite
+    cmds:
+      - "{{.PYTHON}} -m pytest {{.CLI_ARGS | default \"-x -q\"}}"
+
+  test:watch:
+    desc: Run tests on file change
+    cmds:
+      - "{{.PYTHON}} -m pytest -x -q --tb=short -f"
+
+  lint:
+    desc: Lint and format
+    cmds:
+      - ruff check {{.SRC}} --fix
+      - ruff format {{.SRC}}
+
+  lint:check:
+    desc: Lint check only (no fix)
+    cmds:
+      - ruff check {{.SRC}}
+      - ruff format --check {{.SRC}}
+
+  run:
+    desc: Submit a task to the swarm
+    cmds:
+      - "hf run {{.CLI_ARGS}}"
+
+  dash:
+    desc: Launch TUI dashboard
+    cmds:
+      - hf dash
+
+  status:
+    desc: Show active agents
+    cmds:
+      - hf status
+
+  logs:
+    desc: View agent tmux output
+    cmds:
+      - "hf logs {{.CLI_ARGS}}"
+
+  clean:
+    desc: Kill all agents and remove worktrees
+    cmds:
+      - hf clean
+
+  smoke:
+    desc: Run end-to-end smoke test
+    cmds:
+      - "hf smoke {{.CLI_ARGS | default \"--runtime pi\"}}"
+
+  langfuse:up:
+    desc: Start Langfuse observability stack
+    dir: infra
+    cmds:
+      - docker compose up -d
+
+  langfuse:down:
+    desc: Stop Langfuse stack
+    dir: infra
+    cmds:
+      - docker compose down
+
+  langfuse:logs:
+    desc: Tail Langfuse logs
+    dir: infra
+    cmds:
+      - docker compose logs -f --tail=50
+
+  pre-commit:
+    desc: Run pre-commit checks on all files
+    cmds:
+      - pre-commit run --all-files
+
+  secrets:scan:
+    desc: Scan for secrets in codebase
+    cmds:
+      - detect-secrets scan --exclude-files '\.overstory/|\.horse-fish/' --baseline .secrets.baseline
