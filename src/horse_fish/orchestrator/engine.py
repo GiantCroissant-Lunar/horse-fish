@@ -375,6 +375,10 @@ class Orchestrator:
                 slot = self._pool._get_slot(subtask.agent)
                 if not slot.worktree_path:
                     continue
+                # Auto-fix lint before running gates
+                fix_result = await self._gates.auto_fix_and_commit(slot.worktree_path)
+                if not fix_result.passed:
+                    logger.warning("Auto-fix failed for subtask %s: %s", subtask.id, fix_result.output)
                 results = await self._gates.run_all(slot.worktree_path)
                 if not self._gates.all_passed(results):
                     subtask.state = SubtaskState.failed

@@ -468,3 +468,50 @@ async def test_orchestrator_without_store_does_not_persist(tmp_path: Path, mock_
 
     # Should not raise even without store
     # (persistence methods should gracefully skip when store is None)
+
+
+@pytest.mark.asyncio
+async def test_review_calls_auto_fix_before_run_all(orchestrator, mock_pool, mock_gates):
+    """Test that _review calls auto_fix_and_commit before run_all."""
+    from horse_fish.validation.gates import GateResult
+
+    subtask = Subtask.create("do something")
+    subtask.state = SubtaskState.done
+    subtask.agent = "agent-1"
+
+    run = Run.create("test task")
+    run.subtasks = [subtask]
+    run.state = RunState.reviewing
+
+    slot = AgentSlot(
+        id="agent-1",
+        name="hf-test",
+        runtime="claude",
+        model="claude-sonnet-4.6",
+        capability="builder",
+        state=AgentState.busy,
+        worktree_path="/tmp/test-worktree",
+    )
+    mock_pool._get_slot.return_value = slot
+
+    # Track call order
+    call_order: list[str] = []
+
+    async def track_auto_fix(path):
+        call_order.append("auto_fix_and_commit")
+        return GateResult(gate="auto-fix", passed=True, output="ok", duration_seconds=0.1)
+
+    async def track_run_all(path):
+        call_order.append("run_all")
+        return []
+
+    mock_gates.auto_fix_and_commit = AsyncMock(side_effect=track_auto_fix)
+    mock_gates.run_all = AsyncMock(side_effect=track_run_all)
+    mock_gates.all_passed = MagicMock(return_value=True)
+
+    result = await orchestrator._review(run)
+
+    assert result.state == RunState.merging
+    assert call_order == ["auto_fix_and_commit", "run_all"]
+    mock_gates.auto_fix_and_commit.assert_called_once_with("/tmp/test-worktree")
+    mock_gates.run_all.assert_called_once_with("/tmp/test-worktree")
