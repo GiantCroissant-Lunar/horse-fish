@@ -49,3 +49,32 @@ def build_prompt(
         project_context_section=project_context_section,
         task=task,
     )
+
+
+FIX_PROMPT_TEMPLATE = """Your previous changes failed the following quality gates:
+
+{gate_output}
+
+## Worktree Information
+- Worktree path: {worktree_path}
+- Branch: {branch}
+
+## Instructions
+1. Fix ALL issues listed above.
+2. Run `ruff check --fix src/ tests/` and `ruff format src/ tests/`.
+3. Run `pytest tests/` to verify tests pass.
+4. Commit your fixes when done.
+"""
+
+
+def build_fix_prompt(
+    gate_output: str,
+    worktree_path: str,
+    branch: str,
+) -> str:
+    """Build a prompt telling the agent to fix gate failures."""
+    return FIX_PROMPT_TEMPLATE.format(
+        gate_output=gate_output,
+        worktree_path=worktree_path,
+        branch=branch,
+    )

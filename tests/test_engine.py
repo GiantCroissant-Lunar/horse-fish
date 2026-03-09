@@ -515,3 +515,10 @@ async def test_review_calls_auto_fix_before_run_all(orchestrator, mock_pool, moc
     assert call_order == ["auto_fix_and_commit", "run_all"]
     mock_gates.auto_fix_and_commit.assert_called_once_with("/tmp/test-worktree")
     mock_gates.run_all.assert_called_once_with("/tmp/test-worktree")
+
+
+def test_subtask_has_gate_retry_fields():
+    """Test Subtask has gate_retry_count and max_gate_retries fields."""
+    subtask = Subtask.create("test")
+    assert subtask.gate_retry_count == 0
+    assert subtask.max_gate_retries == 1

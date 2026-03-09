@@ -79,6 +79,8 @@ class Subtask(BaseModel):
     retry_count: int = 0
     max_retries: int = 2
     last_activity_at: datetime | None = None
+    gate_retry_count: int = 0
+    max_gate_retries: int = 1
 
     @classmethod
     def create(cls, description: str) -> Subtask:

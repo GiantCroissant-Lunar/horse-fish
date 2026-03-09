@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from horse_fish.agents.prompt import build_prompt
+from horse_fish.agents.prompt import build_fix_prompt, build_prompt
 
 
 def test_build_prompt_includes_task() -> None:
@@ -67,3 +67,16 @@ def test_build_prompt_includes_ruff_instruction() -> None:
     result = build_prompt(task="test", worktree_path="/tmp", branch="main")
     assert "ruff check --fix" in result
     assert "ruff format" in result
+
+
+def test_build_fix_prompt_contains_gate_output():
+    """Test fix prompt includes gate failure output and worktree path."""
+    result = build_fix_prompt(
+        gate_output="ruff-check: F401 unused import 'os'",
+        worktree_path="/tmp/wt",
+        branch="feat-x",
+    )
+    assert "F401 unused import" in result
+    assert "/tmp/wt" in result
+    assert "fix" in result.lower()
+    assert "commit" in result.lower()
