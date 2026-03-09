@@ -167,41 +167,42 @@ class CogneeMemory:
             self._configure(use_fallback=True)
             await cognee.cognify(datasets=[dataset], temporal_cognify=True)
 
-    async def search(self, query: str, top_k: int = 5) -> list[CogneeHit]:
-        """Search the Cognee knowledge graph using GRAPH_COMPLETION."""
+    @staticmethod
+    def _parse_result(result: Any) -> CogneeHit:
+        """Parse a single Cognee search result into a CogneeHit.
+
+        GRAPH_COMPLETION can return str, dict, or object — handle all formats.
+        """
+        if isinstance(result, str):
+            return CogneeHit(node_id="", content=result, score=1.0, metadata={})
+        if isinstance(result, dict):
+            return CogneeHit(
+                node_id=result.get("id", ""),
+                content=result.get("text", result.get("content", str(result))),
+                score=result.get("score", 1.0),
+                metadata=result.get("metadata", {}),
+            )
+        return CogneeHit(
+            node_id=getattr(result, "id", ""),
+            content=getattr(result, "text", getattr(result, "content", str(result))),
+            score=getattr(result, "score", 1.0),
+            metadata=getattr(result, "metadata", {}),
+        )
+
+    async def _search_cognee(self, query: str, top_k: int = 5, **extra_kwargs: Any) -> list[CogneeHit]:
+        """Shared search implementation with GRAPH_COMPLETION."""
         self._ensure_configured()
 
-        search_type = SearchType.GRAPH_COMPLETION if SearchType else None
-        kwargs: dict[str, Any] = {"query_text": query}
-        if search_type:
-            kwargs["query_type"] = search_type
+        kwargs: dict[str, Any] = {"query_text": query, **extra_kwargs}
+        if SearchType:
+            kwargs["query_type"] = SearchType.GRAPH_COMPLETION
 
         results = await cognee.search(**kwargs)
+        return [self._parse_result(r) for r in results[:top_k]]
 
-        hits: list[CogneeHit] = []
-        for result in results[:top_k]:
-            # GRAPH_COMPLETION returns different structures — handle all formats
-            if isinstance(result, str):
-                hits.append(CogneeHit(node_id="", content=result, score=1.0, metadata={}))
-            elif isinstance(result, dict):
-                hits.append(
-                    CogneeHit(
-                        node_id=result.get("id", ""),
-                        content=result.get("text", result.get("content", str(result))),
-                        score=result.get("score", 1.0),
-                        metadata=result.get("metadata", {}),
-                    )
-                )
-            else:
-                hits.append(
-                    CogneeHit(
-                        node_id=getattr(result, "id", ""),
-                        content=getattr(result, "text", getattr(result, "content", str(result))),
-                        score=getattr(result, "score", 1.0),
-                        metadata=getattr(result, "metadata", {}),
-                    )
-                )
-        return hits
+    async def search(self, query: str, top_k: int = 5) -> list[CogneeHit]:
+        """Search the Cognee knowledge graph using GRAPH_COMPLETION."""
+        return await self._search_cognee(query, top_k=top_k)
 
     async def ingest_run_result(self, run: Run, subtask_results: list[SubtaskResult]) -> None:
         """Ingest a completed run into the knowledge graph using structured node_sets.
@@ -238,35 +239,4 @@ class CogneeMemory:
 
         Searches only the "run_results" dataset for relevant past work.
         """
-        self._ensure_configured()
-
-        search_type = SearchType.GRAPH_COMPLETION if SearchType else None
-        kwargs: dict[str, Any] = {"query_text": task_description, "datasets": ["run_results"]}
-        if search_type:
-            kwargs["query_type"] = search_type
-
-        results = await cognee.search(**kwargs)
-
-        hits: list[CogneeHit] = []
-        for result in results[:top_k]:
-            if isinstance(result, str):
-                hits.append(CogneeHit(node_id="", content=result, score=1.0, metadata={}))
-            elif isinstance(result, dict):
-                hits.append(
-                    CogneeHit(
-                        node_id=result.get("id", ""),
-                        content=result.get("text", result.get("content", str(result))),
-                        score=result.get("score", 1.0),
-                        metadata=result.get("metadata", {}),
-                    )
-                )
-            else:
-                hits.append(
-                    CogneeHit(
-                        node_id=getattr(result, "id", ""),
-                        content=getattr(result, "text", getattr(result, "content", str(result))),
-                        score=getattr(result, "score", 1.0),
-                        metadata=getattr(result, "metadata", {}),
-                    )
-                )
-        return hits
+        return await self._search_cognee(task_description, top_k=top_k, datasets=["run_results"])

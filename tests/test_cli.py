@@ -382,15 +382,12 @@ class TestEnvCheck:
         monkeypatch.chdir(tmp_path)
         (tmp_path / ".env").write_text("DASHSCOPE_API_KEY=from-dotenv\n")  # pragma: allowlist secret
         monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
-        # Re-import to trigger dotenv load
-        from importlib import reload
+        # Manually load dotenv since module-level load_dotenv() already ran
+        from dotenv import load_dotenv
 
-        import horse_fish.cli
+        load_dotenv(tmp_path / ".env", override=True)
 
-        reload(horse_fish.cli)
-        from horse_fish.cli import main as reloaded_main
-
-        result = runner.invoke(reloaded_main, ["env-check"])
+        result = runner.invoke(main, ["env-check"])
         assert result.exit_code == 0
-        # Key should be loaded from .env
-        assert "from-dotenv" in result.output or "✓" in result.output
+        # Key should show as masked (first 4 chars + "...")
+        assert "from..." in result.output
