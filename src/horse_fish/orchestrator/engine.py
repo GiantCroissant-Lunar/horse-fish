@@ -250,7 +250,7 @@ class Orchestrator:
                             model=self._model,
                             capability="builder",
                         )
-                    await self._pool.send_task(slot.id, subtask.description)
+                    await self._pool.send_task(slot.id, subtask.description, task_id=subtask.id)
                     subtask.state = SubtaskState.running
                     subtask.agent = slot.id
                     subtask.last_activity_at = datetime.now(UTC)

@@ -216,6 +216,73 @@ async def test_send_task_wraps_prompt_with_context() -> None:
     assert "Use ruff." in sent_prompt
 
 
+@pytest.mark.asyncio
+async def test_send_task_persists_task_id() -> None:
+    """Test that send_task persists the task_id in the database."""
+    store = make_store()
+    tmux = MagicMock()
+    tmux.spawn = AsyncMock(return_value=9)
+    tmux.send_keys = AsyncMock()
+    tmux.capture_pane = AsyncMock(return_value="Ready\n> \n")
+    worktrees = MagicMock()
+    worktrees.create = AsyncMock(return_value=make_worktree_info())
+
+    pool = make_pool(store, tmux, worktrees)
+    slot = await pool.spawn("agent-1", "copilot", "gpt-5.4", "builder")
+
+    task_id = "test-subtask-123"
+    await pool.send_task(slot.id, "implement feature X", task_id=task_id)
+
+    # Verify task_id was persisted in the database
+    agents = pool.list_agents()
+    assert agents[0].task_id == task_id
+    assert agents[0].state == AgentState.busy
+
+
+@pytest.mark.asyncio
+async def test_collect_result_returns_correct_subtask_id() -> None:
+    """Test that collect_result returns the correct subtask_id when task_id is set."""
+    store = make_store()
+    tmux = MagicMock()
+    tmux.spawn = AsyncMock(return_value=7)
+    tmux.capture_pane = AsyncMock(side_effect=["pi v0.55.1\n0.0%/1.0M (auto)\n", "build success\n"])
+    tmux.send_keys = AsyncMock()
+    worktrees = MagicMock()
+    worktrees.create = AsyncMock(return_value=make_worktree_info())
+    worktrees.get_diff = AsyncMock(return_value="diff --git a/foo.py")
+
+    pool = make_pool(store, tmux, worktrees)
+    slot = await pool.spawn("agent-1", "pi", "kimi-for-coding", "builder")
+
+    # Set task_id via send_task
+    task_id = "test-subtask-456"
+    await pool.send_task(slot.id, "build something", task_id=task_id)
+
+    result = await pool.collect_result(slot.id)
+
+    assert result.subtask_id == task_id
+
+
+@pytest.mark.asyncio
+async def test_collect_result_falls_back_to_agent_id_when_no_task_id() -> None:
+    """Test that collect_result falls back to agent_id when task_id is not set."""
+    store = make_store()
+    tmux = MagicMock()
+    tmux.spawn = AsyncMock(return_value=7)
+    tmux.capture_pane = AsyncMock(side_effect=["Ready\n❯ \n", "output\n"])
+    worktrees = MagicMock()
+    worktrees.create = AsyncMock(return_value=make_worktree_info())
+    worktrees.get_diff = AsyncMock(return_value="")
+
+    pool = make_pool(store, tmux, worktrees)
+    slot = await pool.spawn("agent-1", "claude", "model", "builder")
+
+    # Don't call send_task, so task_id remains None
+    result = await pool.collect_result(slot.id)
+
+    assert result.subtask_id == slot.id
+
+
 # ---------------------------------------------------------------------------
 # check_status
 # ---------------------------------------------------------------------------
@@ -409,3 +476,32 @@ async def test_cleanup_skips_busy_agents() -> None:
 
     assert count == 0
     tmux.kill_session.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_releases_busy_agents() -> None:
+    """Test that cleanup() also releases busy agents."""
+    store = make_store()
+    tmux = MagicMock()
+    tmux.spawn = AsyncMock(return_value=1)
+    tmux.send_keys = AsyncMock()
+    tmux.kill_session = AsyncMock()
+    tmux.capture_pane = AsyncMock(return_value="Ready\n❯ \n")
+    worktrees = MagicMock()
+    worktrees.create = AsyncMock(return_value=make_worktree_info())
+    worktrees.remove = AsyncMock()
+    worktrees.cleanup = AsyncMock(return_value=0)
+
+    pool = make_pool(store, tmux, worktrees)
+    slot = await pool.spawn("agent-1", "claude", "model", "builder")
+    # Mark busy directly in store
+    store.execute("UPDATE agents SET state = ? WHERE id = ?", (AgentState.busy, slot.id))
+
+    count = await pool.cleanup()
+
+    assert count == 1
+    tmux.kill_session.assert_awaited_once_with("hf-agent-1")
+    worktrees.remove.assert_awaited_once_with("agent-1")
+
+    agents = pool.list_agents()
+    assert agents[0].state == AgentState.dead

@@ -87,7 +87,7 @@ class AgentPool:
 
         return slot
 
-    async def send_task(self, agent_id: str, prompt: str) -> None:
+    async def send_task(self, agent_id: str, prompt: str, task_id: str | None = None) -> None:
         """Send a prompt to the agent's tmux session and mark it busy."""
         slot = self._get_slot(agent_id)
         full_prompt = build_prompt(
@@ -97,7 +97,7 @@ class AgentPool:
             project_context=self._project_context,
         )
         await self._tmux.send_keys(slot.tmux_session, full_prompt)
-        self._store.execute("UPDATE agents SET state = ? WHERE id = ?", (AgentState.busy, agent_id))
+        self._store.execute("UPDATE agents SET state = ?, task_id = ? WHERE id = ?", (AgentState.busy, task_id, agent_id))
 
     async def check_status(self, agent_id: str) -> AgentState:
         """Return the agent's current state; mark dead if its tmux session is gone."""
@@ -138,11 +138,11 @@ class AgentPool:
         return [_row_to_slot(row) for row in rows]
 
     async def cleanup(self) -> int:
-        """Release all dead or idle agents; prune stale worktrees. Returns count released."""
+        """Release all dead, idle, or busy agents; prune stale worktrees. Returns count released."""
         agents = self.list_agents()
         released = 0
         for slot in agents:
-            if slot.state in (AgentState.dead, AgentState.idle):
+            if slot.state in (AgentState.dead, AgentState.idle, AgentState.busy):
                 try:
                     await self.release(slot.id)
                     released += 1
