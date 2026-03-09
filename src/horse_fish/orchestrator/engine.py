@@ -118,27 +118,53 @@ class Orchestrator:
         self._persist_run(run)
         logger.info("Starting run %s for task: %s", run.id, task)
 
-        trace = self._tracer.trace_run(run.id, task) if self._tracer else None
+        trace = (
+            self._tracer.trace_run(
+                run.id,
+                task,
+                metadata={
+                    "runtime": self._runtime,
+                    "model": self._model,
+                    "max_agents": self._max_agents,
+                },
+                tags=[f"runtime:{self._runtime}"] + ([f"model:{self._model}"] if self._model else []),
+            )
+            if self._tracer
+            else None
+        )
 
-        while run.state not in (RunState.completed, RunState.failed):
-            handler = self._handlers.get(run.state)
-            if handler is None:
-                raise OrchestratorError(f"No handler for state {run.state}")
+        try:
+            while run.state not in (RunState.completed, RunState.failed):
+                handler = self._handlers.get(run.state)
+                if handler is None:
+                    raise OrchestratorError(f"No handler for state {run.state}")
 
-            span = self._tracer.span(trace, run.state.value) if self._tracer and trace else None
-            run = await handler(run)
-            if self._tracer and span:
-                self._tracer.end_span(span, {"state": run.state.value})
+                span = self._tracer.span(trace, run.state.value) if self._tracer and trace else None
+                run = await handler(run)
+                if self._tracer and span:
+                    self._tracer.end_span(
+                        span,
+                        {"state": run.state.value},
+                        metadata={"subtask_count": len(run.subtasks)},
+                    )
 
+                self._persist_run(run)
+                logger.info("Run %s transitioned to %s", run.id, run.state)
+        finally:
+            run.completed_at = datetime.now(UTC)
             self._persist_run(run)
-            logger.info("Run %s transitioned to %s", run.id, run.state)
 
-        run.completed_at = datetime.now(UTC)
-        self._persist_run(run)
-
-        if self._tracer and trace:
-            self._tracer.end_trace(trace, run.state.value)
-
+            if self._tracer and trace:
+                self._tracer.end_trace(
+                    trace,
+                    run.state.value,
+                    output={
+                        "status": run.state.value,
+                        "subtask_count": len(run.subtasks),
+                        "completed_subtasks": sum(1 for s in run.subtasks if s.state == SubtaskState.done),
+                        "failed_subtasks": sum(1 for s in run.subtasks if s.state == SubtaskState.failed),
+                    },
+                )
         if run.state == RunState.completed:
             await self._learn(run)
 

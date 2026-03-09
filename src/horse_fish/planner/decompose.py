@@ -10,6 +10,7 @@ import uuid
 
 from horse_fish.agents.runtime import RUNTIME_REGISTRY
 from horse_fish.models import Subtask
+from horse_fish.observability.traces import Tracer
 
 SYSTEM_PROMPT_TEMPLATE = """\
 You are a task decomposition assistant. Given a high-level task description, break it down into
@@ -56,11 +57,12 @@ class PlannerError(Exception):
 class Planner:
     """Decomposes tasks into subtask DAGs via LLM CLI runtimes."""
 
-    def __init__(self, runtime: str = "claude", model: str | None = None) -> None:
+    def __init__(self, runtime: str = "claude", model: str | None = None, tracer: Tracer | None = None) -> None:
         if runtime not in _CLI_COMMANDS:
             raise ValueError(f"Unknown runtime: {runtime!r}. Must be one of: {sorted(_CLI_COMMANDS)}")
         self.runtime = runtime
         self.model = model or _DEFAULT_MODELS[runtime]
+        self._tracer = tracer
 
     async def decompose(self, task: str, context: str = "") -> list[Subtask]:
         """Decompose a task description into a list of Subtask objects."""
