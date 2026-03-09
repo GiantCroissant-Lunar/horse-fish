@@ -62,7 +62,9 @@ FIX_PROMPT_TEMPLATE = """Your previous changes failed the following quality gate
 ## Instructions
 1. Fix ALL issues listed above.
 2. Run `ruff check --fix src/ tests/` and `ruff format src/ tests/`.
-3. Run `pytest tests/` to verify tests pass.
+3. Run unit tests only (exclude slow integration/e2e tests):
+   `pytest tests/ -x -q --ignore=tests/test_e2e.py --ignore=tests/test_smoke.py \
+     --ignore=tests/test_integration.py --ignore=tests/test_smart_integration.py`
 4. Commit your fixes when done.
 """
 
