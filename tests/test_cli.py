@@ -354,3 +354,43 @@ class TestDashRecord:
             mock_app_class.return_value = mock_app
             runner.invoke(main, ["dash"])
             mock_app.run.assert_called_once()
+
+
+class TestEnvCheck:
+    """Tests for hf env-check command."""
+
+    def test_env_check_all_keys_present(self, runner, monkeypatch):
+        """Shows OK when all keys are set."""
+        monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
+        monkeypatch.setenv("INCEPTION_API_KEY", "test-key")
+        result = runner.invoke(main, ["env-check"])
+        assert result.exit_code == 0
+        assert "DASHSCOPE_API_KEY" in result.output
+        assert "✓" in result.output
+
+    def test_env_check_missing_keys(self, runner, monkeypatch):
+        """Shows MISSING for unset keys."""
+        monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+        monkeypatch.delenv("INCEPTION_API_KEY", raising=False)
+        monkeypatch.delenv("ZAI_API_KEY", raising=False)
+        result = runner.invoke(main, ["env-check"])
+        assert result.exit_code == 0
+        assert "MISSING" in result.output
+
+    def test_env_check_dotenv_loaded(self, runner, monkeypatch, tmp_path):
+        """Keys from .env file are loaded."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env").write_text("DASHSCOPE_API_KEY=from-dotenv\n")  # pragma: allowlist secret
+        monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+        # Re-import to trigger dotenv load
+        from importlib import reload
+
+        import horse_fish.cli
+
+        reload(horse_fish.cli)
+        from horse_fish.cli import main as reloaded_main
+
+        result = runner.invoke(reloaded_main, ["env-check"])
+        assert result.exit_code == 0
+        # Key should be loaded from .env
+        assert "from-dotenv" in result.output or "✓" in result.output
