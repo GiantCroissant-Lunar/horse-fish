@@ -14,6 +14,7 @@ from horse_fish.memory.lessons import LessonStore
 from horse_fish.memory.store import MemoryStore
 from horse_fish.merge.queue import MergeQueue
 from horse_fish.models import AgentState, Run, RunState, Subtask, SubtaskResult, SubtaskState
+from horse_fish.observability.log_context import clear_log_context, set_log_context
 from horse_fish.observability.traces import Tracer
 from horse_fish.planner.decompose import Planner
 from horse_fish.planner.smart import SmartPlanner
@@ -293,6 +294,8 @@ class Orchestrator:
         """Create a Run and drive it through the state machine until terminal."""
         run = Run.create(task)
         self._persist_run(run)
+        # Set logging context for the run
+        context_tokens = set_log_context(run_id=run.id)
         logger.info("Starting run %s for task: %s", run.id, task)
 
         trace = (
@@ -329,9 +332,16 @@ class Orchestrator:
 
                 self._persist_run(run)
                 logger.info("Run %s transitioned to %s", run.id, run.state)
+                # Update context if transitioning between subtasks
+                if run.state == RunState.executing:
+                    clear_log_context()
+                    set_log_context(run_id=run.id)
         finally:
             run.completed_at = datetime.now(UTC)
             self._persist_run(run)
+
+            # Clear logging context
+            reset_log_context(*context_tokens)
 
             if self._tracer and trace:
                 self._score_run_outcomes(run, trace)
