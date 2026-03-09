@@ -87,15 +87,18 @@ class AgentPool:
 
         return slot
 
-    async def send_task(self, agent_id: str, prompt: str, task_id: str | None = None) -> None:
+    async def send_task(self, agent_id: str, prompt: str, task_id: str | None = None, raw: bool = False) -> None:
         """Send a prompt to the agent's tmux session and mark it busy."""
         slot = self._get_slot(agent_id)
-        full_prompt = build_prompt(
-            task=prompt,
-            worktree_path=slot.worktree_path or "",
-            branch=slot.branch or "",
-            project_context=self._project_context,
-        )
+        if raw:
+            full_prompt = prompt
+        else:
+            full_prompt = build_prompt(
+                task=prompt,
+                worktree_path=slot.worktree_path or "",
+                branch=slot.branch or "",
+                project_context=self._project_context,
+            )
         await self._tmux.send_keys(slot.tmux_session, full_prompt)
         self._store.execute(
             "UPDATE agents SET state = ?, task_id = ? WHERE id = ?",

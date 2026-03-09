@@ -365,8 +365,14 @@ class Orchestrator:
         return run
 
     async def _review(self, run: Run) -> Run:
-        """Run validation gates on each completed subtask's worktree."""
+        """Run validation gates on each completed subtask's worktree.
+
+        If gates fail and the agent is alive with retries remaining,
+        send fix feedback and return to executing state.
+        """
         all_passed = True
+        needs_re_execute = False
+
         for subtask in run.subtasks:
             if subtask.state != SubtaskState.done or not subtask.agent:
                 continue
@@ -375,22 +381,60 @@ class Orchestrator:
                 slot = self._pool._get_slot(subtask.agent)
                 if not slot.worktree_path:
                     continue
+
                 # Auto-fix lint before running gates
                 fix_result = await self._gates.auto_fix_and_commit(slot.worktree_path)
                 if not fix_result.passed:
                     logger.warning("Auto-fix failed for subtask %s: %s", subtask.id, fix_result.output)
+
                 results = await self._gates.run_all(slot.worktree_path)
-                if not self._gates.all_passed(results):
-                    subtask.state = SubtaskState.failed
-                    self._persist_subtask(subtask, run.id)
-                    all_passed = False
-                    gate_output = "; ".join(f"{r.gate}: {r.output}" for r in results if not r.passed)
-                    logger.warning("Subtask %s failed gates: %s", subtask.id, gate_output)
+                if self._gates.all_passed(results):
+                    continue
+
+                # Gates failed — try retry
+                gate_output = "; ".join(f"{r.gate}: {r.output}" for r in results if not r.passed)
+                logger.warning("Subtask %s failed gates: %s", subtask.id, gate_output)
+
+                if subtask.gate_retry_count < subtask.max_gate_retries:
+                    # Check agent is still alive
+                    agent_status = await self._pool.check_status(subtask.agent)
+                    if agent_status != AgentState.dead:
+                        # Send fix prompt to agent
+                        from horse_fish.agents.prompt import build_fix_prompt
+
+                        fix_prompt = build_fix_prompt(
+                            gate_output=gate_output,
+                            worktree_path=slot.worktree_path,
+                            branch=slot.branch or "",
+                        )
+                        await self._pool.send_task(subtask.agent, fix_prompt)
+                        subtask.state = SubtaskState.running
+                        subtask.gate_retry_count += 1
+                        subtask.last_activity_at = datetime.now(UTC)
+                        self._persist_subtask(subtask, run.id)
+                        needs_re_execute = True
+                        logger.info(
+                            "Sent fix prompt to agent for subtask %s (gate retry %d/%d)",
+                            subtask.id,
+                            subtask.gate_retry_count,
+                            subtask.max_gate_retries,
+                        )
+                        continue
+
+                # No retries left or agent dead
+                subtask.state = SubtaskState.failed
+                self._persist_subtask(subtask, run.id)
+                all_passed = False
+
             except Exception as exc:
                 logger.error("Review failed for subtask %s: %s", subtask.id, exc)
                 subtask.state = SubtaskState.failed
                 self._persist_subtask(subtask, run.id)
                 all_passed = False
+
+        if needs_re_execute:
+            run.state = RunState.executing
+            return run
 
         run.state = RunState.merging if all_passed else RunState.failed
         return run

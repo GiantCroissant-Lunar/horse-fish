@@ -188,6 +188,28 @@ async def test_send_task_sends_keys_and_marks_agent_busy() -> None:
 
 
 @pytest.mark.asyncio
+async def test_send_task_raw_skips_prompt_wrapping() -> None:
+    """Test that send_task with raw=True sends prompt as-is."""
+    store = make_store()
+    tmux = MagicMock()
+    tmux.spawn = AsyncMock(return_value=9)
+    tmux.send_keys = AsyncMock()
+    tmux.capture_pane = AsyncMock(return_value="Ready\n> \n")
+    worktrees = MagicMock()
+    worktrees.create = AsyncMock(return_value=make_worktree_info())
+
+    pool = make_pool(store, tmux, worktrees)
+    slot = await pool.spawn("agent-1", "copilot", "gpt-5.4", "builder")
+
+    await pool.send_task(slot.id, "fix this lint error", raw=True)
+
+    tmux.send_keys.assert_awaited_once()
+    sent_text = tmux.send_keys.call_args[0][1]
+    assert sent_text == "fix this lint error"
+    assert "## Worktree Information" not in sent_text
+
+
+@pytest.mark.asyncio
 async def test_send_task_raises_for_missing_agent() -> None:
     pool = make_pool(make_store(), MagicMock(), MagicMock())
     with pytest.raises(KeyError, match="not found"):

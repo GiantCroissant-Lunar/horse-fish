@@ -517,6 +517,140 @@ async def test_review_calls_auto_fix_before_run_all(orchestrator, mock_pool, moc
     mock_gates.run_all.assert_called_once_with("/tmp/test-worktree")
 
 
+@pytest.mark.asyncio
+async def test_review_retries_on_gate_failure(orchestrator, mock_pool, mock_gates):
+    """Test that _review sends fix prompt and returns to executing when gates fail and retries remain."""
+    from horse_fish.validation.gates import GateResult
+
+    subtask = Subtask.create("do something")
+    subtask.state = SubtaskState.done
+    subtask.agent = "agent-1"
+    subtask.gate_retry_count = 0
+    subtask.max_gate_retries = 1
+
+    run = Run.create("test task")
+    run.subtasks = [subtask]
+    run.state = RunState.reviewing
+
+    slot = AgentSlot(
+        id="agent-1",
+        name="hf-test",
+        runtime="claude",
+        model="claude-sonnet-4.6",
+        capability="builder",
+        state=AgentState.busy,
+        worktree_path="/tmp/test-worktree",
+        branch="feat-test",
+    )
+    mock_pool._get_slot.return_value = slot
+
+    # Gates fail
+    mock_gates.auto_fix_and_commit = AsyncMock(
+        return_value=GateResult(gate="auto-fix", passed=True, output="ok", duration_seconds=0.1)
+    )
+    failed_gate = GateResult(gate="ruff-check", passed=False, output="F401 unused import", duration_seconds=0.1)
+    mock_gates.run_all = AsyncMock(return_value=[failed_gate])
+    mock_gates.all_passed = MagicMock(return_value=False)
+
+    # Agent is still alive
+    mock_pool.check_status = AsyncMock(return_value=AgentState.busy)
+    mock_pool.send_task = AsyncMock()
+
+    result = await orchestrator._review(run)
+
+    # Should transition back to executing, not failed
+    assert result.state == RunState.executing
+    assert subtask.state == SubtaskState.running
+    assert subtask.gate_retry_count == 1
+    # Should have sent fix prompt to agent
+    mock_pool.send_task.assert_called_once()
+    call_args = mock_pool.send_task.call_args
+    assert "F401 unused import" in call_args[0][1]  # prompt contains gate output
+
+
+@pytest.mark.asyncio
+async def test_review_fails_when_gate_retries_exhausted(orchestrator, mock_pool, mock_gates):
+    """Test that _review fails the run when gate retries are exhausted."""
+    from horse_fish.validation.gates import GateResult
+
+    subtask = Subtask.create("do something")
+    subtask.state = SubtaskState.done
+    subtask.agent = "agent-1"
+    subtask.gate_retry_count = 1
+    subtask.max_gate_retries = 1  # Already at max
+
+    run = Run.create("test task")
+    run.subtasks = [subtask]
+    run.state = RunState.reviewing
+
+    slot = AgentSlot(
+        id="agent-1",
+        name="hf-test",
+        runtime="claude",
+        model="claude-sonnet-4.6",
+        capability="builder",
+        state=AgentState.busy,
+        worktree_path="/tmp/test-worktree",
+    )
+    mock_pool._get_slot.return_value = slot
+
+    mock_gates.auto_fix_and_commit = AsyncMock(
+        return_value=GateResult(gate="auto-fix", passed=True, output="ok", duration_seconds=0.1)
+    )
+    failed_gate = GateResult(gate="pytest", passed=False, output="2 failed", duration_seconds=1.0)
+    mock_gates.run_all = AsyncMock(return_value=[failed_gate])
+    mock_gates.all_passed = MagicMock(return_value=False)
+
+    result = await orchestrator._review(run)
+
+    # Should fail — no retries left
+    assert result.state == RunState.failed
+    assert subtask.state == SubtaskState.failed
+
+
+@pytest.mark.asyncio
+async def test_review_skips_retry_when_agent_dead(orchestrator, mock_pool, mock_gates):
+    """Test that _review doesn't retry when agent tmux session is dead."""
+    from horse_fish.validation.gates import GateResult
+
+    subtask = Subtask.create("do something")
+    subtask.state = SubtaskState.done
+    subtask.agent = "agent-1"
+    subtask.gate_retry_count = 0
+    subtask.max_gate_retries = 1
+
+    run = Run.create("test task")
+    run.subtasks = [subtask]
+    run.state = RunState.reviewing
+
+    slot = AgentSlot(
+        id="agent-1",
+        name="hf-test",
+        runtime="claude",
+        model="claude-sonnet-4.6",
+        capability="builder",
+        state=AgentState.busy,
+        worktree_path="/tmp/test-worktree",
+    )
+    mock_pool._get_slot.return_value = slot
+
+    mock_gates.auto_fix_and_commit = AsyncMock(
+        return_value=GateResult(gate="auto-fix", passed=True, output="ok", duration_seconds=0.1)
+    )
+    failed_gate = GateResult(gate="pytest", passed=False, output="1 failed", duration_seconds=1.0)
+    mock_gates.run_all = AsyncMock(return_value=[failed_gate])
+    mock_gates.all_passed = MagicMock(return_value=False)
+
+    # Agent is dead
+    mock_pool.check_status = AsyncMock(return_value=AgentState.dead)
+
+    result = await orchestrator._review(run)
+
+    # Should fail — can't retry with dead agent
+    assert result.state == RunState.failed
+    assert subtask.state == SubtaskState.failed
+
+
 def test_subtask_has_gate_retry_fields():
     """Test Subtask has gate_retry_count and max_gate_retries fields."""
     subtask = Subtask.create("test")

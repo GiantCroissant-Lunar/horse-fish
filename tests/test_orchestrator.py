@@ -347,8 +347,15 @@ async def test_review_all_gates_pass(orchestrator, mock_pool, mock_gates):
 
 @pytest.mark.asyncio
 async def test_review_gate_failure(orchestrator, mock_pool, mock_gates):
-    """Test _review gate failure → state becomes failed."""
-    subtask = Subtask(id="subtask-1", description="Task 1", state=SubtaskState.done, agent="agent-1")
+    """Test _review gate failure → state becomes failed when retries exhausted."""
+    subtask = Subtask(
+        id="subtask-1",
+        description="Task 1",
+        state=SubtaskState.done,
+        agent="agent-1",
+        gate_retry_count=1,
+        max_gate_retries=1,
+    )
     run = Run.create("Build system")
     run.subtasks = [subtask]
     run.state = RunState.reviewing
@@ -364,7 +371,10 @@ async def test_review_gate_failure(orchestrator, mock_pool, mock_gates):
     )
     mock_pool._get_slot.return_value = slot
 
-    # Mock gates to fail
+    # Mock auto-fix and gates to fail
+    mock_gates.auto_fix_and_commit = AsyncMock(
+        return_value=GateResult(gate="auto-fix", passed=True, output="ok", duration_seconds=0.1)
+    )
     mock_gates.run_all = AsyncMock(
         return_value=[
             GateResult(gate="compile", passed=False, output="syntax error", duration_seconds=1.0),
