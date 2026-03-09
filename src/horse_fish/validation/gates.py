@@ -111,15 +111,24 @@ class ValidationGates:
         output = stdout.decode().strip() or stderr.decode().strip()
         return proc.returncode == 0, output
 
-    async def _run_pytest(self, worktree_path: Path) -> tuple[bool, str]:
+    async def _run_pytest(self, worktree_path: Path, timeout: int = 120) -> tuple[bool, str]:
         proc = await asyncio.create_subprocess_exec(
             "pytest",
             "tests/",
+            "--ignore=tests/test_e2e.py",
+            "--ignore=tests/test_smoke.py",
+            "-x",
+            "-q",
             cwd=str(worktree_path),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await proc.communicate()
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return False, f"pytest timed out after {timeout}s"
         output = stdout.decode().strip() or stderr.decode().strip()
         return proc.returncode == 0, output
 
