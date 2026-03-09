@@ -208,6 +208,36 @@ class Store:
             (run_id,),
         )
 
+    def fetch_run_stats(self) -> dict[str, Any]:
+        """Fetch aggregate run statistics."""
+        total_row = self.fetchone("SELECT COUNT(*) AS total FROM runs")
+        total = total_row["total"] if total_row else 0
+
+        state_rows = self.fetchall("SELECT state, COUNT(*) AS cnt FROM runs GROUP BY state")
+        by_state: dict[str, int] = {r["state"]: r["cnt"] for r in state_rows}
+
+        avg_row = self.fetchone(
+            """SELECT AVG(
+                   (julianday(completed_at) - julianday(created_at)) * 86400
+               ) AS avg_secs
+               FROM runs WHERE completed_at IS NOT NULL AND created_at != ''"""
+        )
+        avg_duration_secs: float | None = avg_row["avg_secs"] if avg_row else None
+
+        runtime_rows = self.fetchall(
+            """SELECT a.runtime, COUNT(DISTINCT s.id) AS cnt
+               FROM subtasks s JOIN agents a ON s.agent_id = a.id
+               GROUP BY a.runtime ORDER BY cnt DESC"""
+        )
+        runtimes: list[dict[str, Any]] = [{"runtime": r["runtime"], "count": r["cnt"]} for r in runtime_rows]
+
+        return {
+            "total_runs": total,
+            "by_state": by_state,
+            "avg_duration_secs": avg_duration_secs,
+            "runtimes": runtimes,
+        }
+
     def close(self) -> None:
         self._conn.close()
 
