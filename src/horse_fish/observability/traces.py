@@ -18,19 +18,25 @@ class RunTrace:
     run_id: str
     task: str
     trace_id: str | None = None
+    root_id: str | None = None
     spans: list[Span] = field(default_factory=list)
+    _root_observation: Any | None = None
+    _root_context: Any | None = None
 
 
 @dataclass
 class Span:
-    """Represents a span within a trace (plan, dispatch, execute, review, merge)."""
+    """Represents a Langfuse observation within a trace."""
 
     name: str
-    trace: RunTrace
+    trace: RunTrace | None
     span_id: str | None = None
+    kind: str = "span"
     metadata: dict[str, Any] | None = None
-    output: dict[str, Any] | None = None
+    output: Any | None = None
     ended: bool = False
+    _observation: Any | None = None
+    _context: Any | None = None
 
 
 class Tracer:
@@ -82,7 +88,25 @@ class Tracer:
         """Check if tracer is in no-op mode."""
         return self._client is None
 
-    def trace_run(self, run_id: str, task: str) -> RunTrace:
+    def get_prompt(self, name: str, fallback: str) -> Any | None:
+        """Fetch a Langfuse-managed prompt, returning None on failure/no-op."""
+        if self._is_noop():
+            return None
+
+        try:
+            return self._client.get_prompt(name, type="text", fallback=fallback)
+        except Exception:
+            return None
+
+    def trace_run(
+        self,
+        run_id: str,
+        task: str,
+        *,
+        metadata: dict[str, Any] | None = None,
+        tags: list[str] | None = None,
+        user_id: str | None = None,
+    ) -> RunTrace:
         """
         Start a trace for an orchestrator run.
 
@@ -99,19 +123,33 @@ class Tracer:
             return trace
 
         try:
-            langfuse_trace = self._client.trace(
-                id=run_id,
+            root_context = self._client.start_as_current_span(
                 name="orchestrator_run",
                 input={"task": task},
+                metadata=metadata,
+                end_on_exit=False,
             )
-            trace.trace_id = langfuse_trace.id
+            root_observation = root_context.__enter__()
+            trace.trace_id = root_observation.trace_id
+            trace.root_id = root_observation.id
+            trace._root_observation = root_observation
+            trace._root_context = root_context
+
+            self._client.update_current_trace(
+                name="orchestrator_run",
+                session_id=run_id,
+                user_id=user_id,
+                input={"task": task},
+                metadata=metadata,
+                tags=tags,
+            )
         except Exception:
             # Silently fail in production - don't break the run
             pass
 
         return trace
 
-    def span(self, trace: RunTrace, name: str, metadata: dict[str, Any] | None = None) -> Span:
+    def span(self, trace: RunTrace | None, name: str, metadata: dict[str, Any] | None = None) -> Span:
         """
         Create a span within a trace.
 
@@ -125,24 +163,77 @@ class Tracer:
         """
         span = Span(name=name, trace=trace, metadata=metadata)
 
-        if self._is_noop() or trace.trace_id is None:
-            trace.spans.append(span)
+        if self._is_noop() or (trace is not None and trace._root_observation is None):
+            if trace is not None:
+                trace.spans.append(span)
             return span
 
         try:
-            langfuse_span = self._client.span(
-                trace_id=trace.trace_id,
+            span_context = self._client.start_as_current_span(
                 name=name,
                 metadata=metadata,
+                end_on_exit=False,
             )
-            span.span_id = langfuse_span.id
+            observation = span_context.__enter__()
+            span.span_id = observation.id
+            span._observation = observation
+            span._context = span_context
         except Exception:
             pass
 
-        trace.spans.append(span)
+        if trace is not None:
+            trace.spans.append(span)
         return span
 
-    def end_span(self, span: Span, output: dict[str, Any] | None = None) -> None:
+    def generation(
+        self,
+        trace: RunTrace | None,
+        name: str,
+        *,
+        input: Any | None = None,
+        metadata: dict[str, Any] | None = None,
+        model: str | None = None,
+        model_parameters: dict[str, Any] | None = None,
+        prompt: Any | None = None,
+    ) -> Span:
+        """Create a generation observation within a trace."""
+        generation = Span(name=name, trace=trace, kind="generation", metadata=metadata)
+
+        if self._is_noop():
+            if trace is not None:
+                trace.spans.append(generation)
+            return generation
+
+        try:
+            generation_context = self._client.start_as_current_observation(
+                name=name,
+                as_type="generation",
+                input=input,
+                metadata=metadata,
+                model=model,
+                model_parameters=model_parameters,
+                prompt=prompt,
+                end_on_exit=False,
+            )
+            observation = generation_context.__enter__()
+            generation.span_id = observation.id
+            generation._observation = observation
+            generation._context = generation_context
+        except Exception:
+            pass
+
+        if trace is not None:
+            trace.spans.append(generation)
+        return generation
+
+    def end_span(
+        self,
+        span: Span,
+        output: Any | None = None,
+        metadata: dict[str, Any] | None = None,
+        level: str | None = None,
+        status_message: str | None = None,
+    ) -> None:
         """
         End a span with optional output.
 
@@ -156,16 +247,28 @@ class Tracer:
         span.output = output
         span.ended = True
 
-        if self._is_noop() or span.span_id is None:
+        if self._is_noop() or span._observation is None:
             return
 
         try:
-            span_obj = self._client.span(id=span.span_id)
-            span_obj.end(output=output)
+            update_kwargs: dict[str, Any] = {}
+            if output is not None:
+                update_kwargs["output"] = output
+            if metadata is not None:
+                update_kwargs["metadata"] = metadata
+            if level is not None:
+                update_kwargs["level"] = level
+            if status_message is not None:
+                update_kwargs["status_message"] = status_message
+            if update_kwargs:
+                span._observation.update(**update_kwargs)
+            span._observation.end()
+            if span._context is not None:
+                span._context.__exit__(None, None, None)
         except Exception:
             pass
 
-    def end_trace(self, trace: RunTrace, status: str) -> None:
+    def end_trace(self, trace: RunTrace, status: str, output: Any | None = None) -> None:
         """
         End the run trace.
 
@@ -173,12 +276,42 @@ class Tracer:
             trace: RunTrace to end.
             status: Final status of the run (e.g., "completed", "failed").
         """
+        if self._is_noop() or trace._root_observation is None:
+            return
+
+        try:
+            trace_output = output if output is not None else {"status": status}
+            trace._root_observation.update(output=trace_output)
+            trace._root_observation.end()
+            if trace._root_context is not None:
+                trace._root_context.__exit__(None, None, None)
+            self._client.flush()
+        except Exception:
+            pass
+
+    def score_trace(
+        self,
+        trace: RunTrace,
+        name: str,
+        value: float | str,
+        *,
+        data_type: str | None = None,
+        comment: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Create a score on the given trace."""
         if self._is_noop() or trace.trace_id is None:
             return
 
         try:
-            langfuse_trace = self._client.trace(id=trace.trace_id)
-            langfuse_trace.update(status=status)
-            self._client.flush()
+            self._client.create_score(
+                name=name,
+                value=value,
+                trace_id=trace.trace_id,
+                session_id=trace.run_id,
+                data_type=data_type,
+                comment=comment,
+                metadata=metadata,
+            )
         except Exception:
             pass

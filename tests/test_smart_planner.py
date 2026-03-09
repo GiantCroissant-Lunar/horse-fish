@@ -18,6 +18,7 @@ def make_mock_planner():
     planner.decompose = AsyncMock()
     planner._build_command = MagicMock(return_value=["claude", "--print", "-m", "model", "prompt"])
     planner._run_cli = AsyncMock()
+    planner._tracer = None
     planner.runtime = "claude"
     planner.model = "claude-sonnet-4-6"
     return planner
@@ -170,6 +171,61 @@ async def test_classify_unknown_defaults_to_solo():
 
     assert complexity == TaskComplexity.solo
     assert len(subtasks) == 1
+
+
+@pytest.mark.asyncio
+async def test_classify_emits_generation_trace():
+    planner = make_mock_planner()
+    planner._run_cli = AsyncMock(return_value="TRIO")
+    planner._tracer = MagicMock()
+    planner._tracer.generation.return_value = MagicMock()
+    planner._tracer.get_prompt.return_value = None
+    planner.decompose = AsyncMock(return_value=[Subtask.create("Add model")])
+    smart = SmartPlanner(planner)
+
+    subtasks, complexity = await smart.decompose("Add user endpoint")
+
+    assert complexity == TaskComplexity.trio
+    assert len(subtasks) == 1
+    planner._tracer.generation.assert_called_once()
+    planner._tracer.end_span.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_classify_traces_generation_error():
+    planner = make_mock_planner()
+    planner._run_cli = AsyncMock(side_effect=Exception("classifier crashed"))
+    planner._tracer = MagicMock()
+    planner._tracer.generation.return_value = MagicMock()
+    planner._tracer.get_prompt.return_value = None
+    smart = SmartPlanner(planner)
+
+    subtasks, complexity = await smart.decompose("some task")
+
+    assert complexity == TaskComplexity.solo
+    assert len(subtasks) == 1
+    planner._tracer.end_span.assert_called_once()
+    assert planner._tracer.end_span.call_args.kwargs["level"] == "ERROR"
+
+
+@pytest.mark.asyncio
+async def test_classify_uses_langfuse_prompt_when_available():
+    planner = make_mock_planner()
+    planner._run_cli = AsyncMock(return_value="TRIO")
+    planner._tracer = MagicMock()
+    planner._tracer.generation.return_value = MagicMock()
+    prompt_client = MagicMock()
+    prompt_client.compile.return_value = "Managed classify prompt"
+    prompt_client.version = 5
+    prompt_client.labels = ["production"]
+    planner._tracer.get_prompt.return_value = prompt_client
+    planner.decompose = AsyncMock(return_value=[Subtask.create("Add model")])
+    smart = SmartPlanner(planner)
+
+    await smart.decompose("Add user endpoint")
+
+    prompt_client.compile.assert_called_once()
+    assert planner._tracer.generation.call_args.kwargs["prompt"] is prompt_client
 
 
 # --- Ceremony stripping in decompose ---

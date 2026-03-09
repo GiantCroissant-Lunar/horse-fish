@@ -136,6 +136,43 @@ def test_run_with_options(mock_init_components, runner, mock_run):
     mock_orchestrator.run.assert_called_once_with("custom task")
 
 
+@patch("horse_fish.cli.Orchestrator")
+@patch("horse_fish.cli.Planner")
+@patch("horse_fish.cli.Tracer")
+@patch("horse_fish.cli.AgentPool")
+@patch("horse_fish.cli.WorktreeManager")
+@patch("horse_fish.cli.TmuxManager")
+@patch("horse_fish.cli.Store")
+@patch("pathlib.Path.cwd")
+def test_init_components_wires_tracer(
+    mock_cwd,
+    mock_store_class,
+    _mock_tmux_class,
+    _mock_worktrees_class,
+    _mock_pool_class,
+    mock_tracer_class,
+    mock_planner_class,
+    mock_orchestrator_class,
+):
+    """_init_components should create one tracer and pass it to planner and orchestrator."""
+    mock_cwd.return_value = MagicMock()
+    mock_store = MagicMock()
+    mock_store_class.return_value = mock_store
+    mock_tracer = MagicMock()
+    mock_tracer_class.return_value = mock_tracer
+    mock_planner = MagicMock()
+    mock_planner.model = "claude-sonnet-4-6"
+    mock_planner_class.return_value = mock_planner
+
+    from horse_fish.cli import _init_components
+
+    _init_components("claude", None, 3)
+
+    mock_tracer_class.assert_called_once_with()
+    mock_planner_class.assert_called_once_with(runtime="claude", model=None, tracer=mock_tracer)
+    assert mock_orchestrator_class.call_args.kwargs["tracer"] is mock_tracer
+
+
 @patch("horse_fish.cli.MergeQueue")
 @patch("horse_fish.cli.WorktreeManager")
 @patch("horse_fish.cli.Store")
@@ -471,9 +508,11 @@ class TestEnvCheck:
         """Shows OK when all keys are set."""
         monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
         monkeypatch.setenv("INCEPTION_API_KEY", "test-key")
+        monkeypatch.setenv("LANGFUSE_HOST", "http://localhost:3000")
         result = runner.invoke(main, ["env-check"])
         assert result.exit_code == 0
         assert "DASHSCOPE_API_KEY" in result.output
+        assert "LANGFUSE_HOST" in result.output
         assert "✓" in result.output
 
     def test_env_check_missing_keys(self, runner, monkeypatch):

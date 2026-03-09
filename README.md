@@ -17,6 +17,10 @@ hf run "fix the broken test in tests/test_utils.py" --runtime pi
 
 # Monitor (in another terminal)
 hf dash
+
+# Optional: start Langfuse and verify config
+task langfuse:up
+hf env-check
 ```
 
 ## Architecture
@@ -76,6 +80,56 @@ task smoke             # End-to-end smoke test
 task dash              # Launch dashboard
 task setup             # Install dev + all optional deps
 ```
+
+## Observability
+
+Langfuse is optional but now useful for normal `hf run` executions, not just local experiments.
+
+```bash
+# Install the SDK
+pip install -e ".[observability]"
+
+# Start the local Langfuse stack
+task langfuse:up
+
+# Open Langfuse, create a project, and copy the API keys
+# http://localhost:3000
+
+# Add keys to infra/.env or your shell
+export LANGFUSE_HOST=http://localhost:3000
+export LANGFUSE_PUBLIC_KEY=pk-lf-...
+export LANGFUSE_SECRET_KEY=sk-lf-...
+
+# Confirm the CLI sees the config
+hf env-check
+```
+
+Current tracing covers:
+
+- One root trace per `hf run`
+- State spans for planning, executing, reviewing, and merging
+- Subtask operation spans for dispatch, result collection, review, stall recovery, gate retries, merge queueing, and merge
+- Agent lifecycle spans for spawn, respawn, and readiness waits
+- Agent execution probe spans for status checks and result collection
+- Runtime-derived observations for tool calls and interactive prompts seen in pane output, tagged with run/subtask context when dispatched by the orchestrator
+- Trace scores for runtime-derived observation counts (total, tool, prompt) with per-runtime, per-observation-name, per-subtask, excerpt, and recency metadata
+- Final trace output includes a compact runtime observation summary for quick inspection at the root trace level
+- Generation observations for `smart_planner.classify` and `planner.decompose`
+- Generation observations for agent task prompts, fix prompts, and raw prompt sends
+- Langfuse-managed text prompts with local fallbacks for planner classify/decompose prompts
+- Langfuse-managed text prompts with local fallbacks for agent task/fix prompts
+- Trace scores for run success, completed/failed subtasks, review gate pass rate, retries, and merge conflicts
+- Run-level metadata such as runtime, model, max agents, subtask counts, and final status
+
+Current assessment:
+
+- The Langfuse integration is now sufficient for normal operational debugging of `hf run`: planner calls, agent prompt sends, orchestrator lifecycle, retry paths, merge conflicts, and runtime-observed tool/prompt activity are all visible at the trace level
+- The remaining gaps are higher-order improvements, not missing baseline coverage: better quality/evaluation signals and replacing regex-derived runtime observations with structured runtime-native events where possible
+
+Recommended next Langfuse improvements:
+
+- Add planner-quality scores and evaluator feedback loops
+- Replace regex-based runtime output parsing with structured runtime-native events where available
 
 ## Project Structure
 

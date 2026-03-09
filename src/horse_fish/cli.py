@@ -17,6 +17,7 @@ from horse_fish.agents.worktree import WorktreeManager
 from horse_fish.memory.lessons import LessonStore
 from horse_fish.memory.store import MemoryStore
 from horse_fish.merge.queue import MergeQueue
+from horse_fish.observability.traces import Tracer
 from horse_fish.orchestrator.engine import Orchestrator
 from horse_fish.planner.decompose import Planner
 from horse_fish.store.db import Store
@@ -42,8 +43,9 @@ def _init_components(runtime: str, model: str | None, max_agents: int, planner_r
     worktrees = WorktreeManager(repo_root)
     claude_md = Path.cwd() / "CLAUDE.md"
     project_context = claude_md.read_text() if claude_md.exists() else None
-    pool = AgentPool(store, tmux, worktrees, project_context=project_context)
-    planner = Planner(runtime=planner_runtime or runtime, model=model if not planner_runtime else None)
+    tracer = Tracer()
+    pool = AgentPool(store, tmux, worktrees, project_context=project_context, tracer=tracer)
+    planner = Planner(runtime=planner_runtime or runtime, model=model if not planner_runtime else None, tracer=tracer)
     # Use user-specified model for agents; only fall back to planner default when no separate planner runtime
     effective_model = model or (planner.model if not planner_runtime else "")
     gates = ValidationGates()
@@ -58,6 +60,7 @@ def _init_components(runtime: str, model: str | None, max_agents: int, planner_r
         runtime=runtime,
         model=effective_model,
         max_agents=max_agents,
+        tracer=tracer,
         memory=memory,
         lesson_store=lesson_store,
         cognee_memory=cognee_memory,
@@ -188,6 +191,7 @@ _ENV_KEYS = [
     ("DASHSCOPE_API_KEY", "Pi runtime, Cognee fallback LLM", True),
     ("ZAI_API_KEY", "Droid runtime (Z.AI/GLM)", False),
     ("INCEPTION_API_KEY", "Cognee primary LLM (Mercury 2)", False),
+    ("LANGFUSE_HOST", "Langfuse host URL", False),
     ("LANGFUSE_PUBLIC_KEY", "Langfuse observability", False),
     ("LANGFUSE_SECRET_KEY", "Langfuse observability", False),
 ]

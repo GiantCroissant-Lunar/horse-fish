@@ -8,6 +8,7 @@ from typing import Any
 
 from horse_fish.memory.lessons import LessonStore
 from horse_fish.models import Subtask, TaskComplexity
+from horse_fish.observability.prompts import resolve_text_prompt
 from horse_fish.planner.decompose import Planner
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,8 @@ Context: {context}
 
 Reply with ONLY one word: SOLO, TRIO, or SQUAD.
 """
+
+CLASSIFY_PROMPT_NAME = "smart-planner-classify"
 
 _CEREMONY_PATTERNS = re.compile(
     r"^(commit|run tests|write tests for|commit all|format code|run linter|"
@@ -103,16 +106,67 @@ class SmartPlanner:
 
     async def _classify(self, task: str, context: str, lessons: str) -> TaskComplexity:
         """Ask the LLM to classify task complexity."""
-        prompt = _CLASSIFY_PROMPT.format(
+        tracer = getattr(self._planner, "_tracer", None)
+        resolved_prompt = resolve_text_prompt(
+            tracer,
+            CLASSIFY_PROMPT_NAME,
+            _CLASSIFY_PROMPT,
             task=task,
             context=context or "No additional context.",
             lessons=f"Lessons from past runs:\n{lessons}" if lessons else "",
         )
+        prompt = resolved_prompt.compiled
+        generation = (
+            tracer.generation(
+                None,
+                "smart_planner.classify",
+                input={"task": task, "context": context, "lessons": lessons, "prompt": prompt},
+                metadata={
+                    "runtime": self._planner.runtime,
+                    "model": self._planner.model,
+                    "has_lessons": bool(lessons),
+                    "prompt_name": resolved_prompt.name,
+                    "prompt_source": resolved_prompt.source,
+                    "prompt_version": resolved_prompt.version,
+                },
+                model=self._planner.model,
+                model_parameters={"runtime": self._planner.runtime},
+                prompt=resolved_prompt.prompt_client,
+            )
+            if tracer
+            else None
+        )
         try:
             cmd = self._planner._build_command(prompt)
             raw = await self._planner._run_cli(cmd)
-            return self._parse_complexity(raw.strip())
+            complexity = self._parse_complexity(raw.strip())
+            if tracer and generation:
+                tracer.end_span(
+                    generation,
+                    {"raw_output": raw.strip(), "complexity": complexity.value},
+                    metadata={
+                        "runtime": self._planner.runtime,
+                        "model": self._planner.model,
+                        "prompt_name": resolved_prompt.name,
+                        "prompt_source": resolved_prompt.source,
+                        "prompt_version": resolved_prompt.version,
+                    },
+                )
+            return complexity
         except Exception as exc:
+            if tracer and generation:
+                tracer.end_span(
+                    generation,
+                    {"error": str(exc)},
+                    metadata={
+                        "runtime": self._planner.runtime,
+                        "model": self._planner.model,
+                        "prompt_name": resolved_prompt.name,
+                        "prompt_source": resolved_prompt.source,
+                    },
+                    level="ERROR",
+                    status_message=str(exc),
+                )
             logger.warning("Classification failed, defaulting to SOLO: %s", exc)
             return TaskComplexity.solo
 

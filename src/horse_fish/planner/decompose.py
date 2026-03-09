@@ -10,6 +10,8 @@ import uuid
 
 from horse_fish.agents.runtime import RUNTIME_REGISTRY
 from horse_fish.models import Subtask
+from horse_fish.observability.prompts import resolve_text_prompt
+from horse_fish.observability.traces import Tracer
 
 SYSTEM_PROMPT_TEMPLATE = """\
 You are a task decomposition assistant. Given a high-level task description, break it down into
@@ -31,6 +33,8 @@ Context: {context}
 
 Task: {task}
 """
+
+DECOMPOSE_PROMPT_NAME = "planner-decompose"
 
 _CLI_COMMANDS: dict[str, list[str]] = {
     "claude": ["claude", "--print", "--model", "{model}", "{prompt}"],
@@ -56,18 +60,77 @@ class PlannerError(Exception):
 class Planner:
     """Decomposes tasks into subtask DAGs via LLM CLI runtimes."""
 
-    def __init__(self, runtime: str = "claude", model: str | None = None) -> None:
+    def __init__(self, runtime: str = "claude", model: str | None = None, tracer: Tracer | None = None) -> None:
         if runtime not in _CLI_COMMANDS:
             raise ValueError(f"Unknown runtime: {runtime!r}. Must be one of: {sorted(_CLI_COMMANDS)}")
         self.runtime = runtime
         self.model = model or _DEFAULT_MODELS[runtime]
+        self._tracer = tracer
 
     async def decompose(self, task: str, context: str = "") -> list[Subtask]:
         """Decompose a task description into a list of Subtask objects."""
-        prompt = self._build_prompt(task, context)
-        cmd = self._build_command(prompt)
-        raw = await self._run_cli(cmd)
-        return self._parse_response(raw)
+        resolved_prompt = resolve_text_prompt(
+            self._tracer,
+            DECOMPOSE_PROMPT_NAME,
+            SYSTEM_PROMPT_TEMPLATE,
+            task=task,
+            context=context or "No additional context provided.",
+        )
+        prompt = resolved_prompt.compiled
+        generation = (
+            self._tracer.generation(
+                None,
+                "planner.decompose",
+                input={"task": task, "context": context, "prompt": prompt},
+                metadata={
+                    "runtime": self.runtime,
+                    "model": self.model,
+                    "context_provided": bool(context),
+                    "prompt_name": resolved_prompt.name,
+                    "prompt_source": resolved_prompt.source,
+                    "prompt_version": resolved_prompt.version,
+                },
+                model=self.model,
+                model_parameters={"runtime": self.runtime},
+                prompt=resolved_prompt.prompt_client,
+            )
+            if self._tracer
+            else None
+        )
+
+        try:
+            cmd = self._build_command(prompt)
+            raw = await self._run_cli(cmd)
+            subtasks = self._parse_response(raw)
+        except Exception as exc:
+            if self._tracer and generation:
+                self._tracer.end_span(
+                    generation,
+                    {"error": str(exc)},
+                    metadata={
+                        "runtime": self.runtime,
+                        "model": self.model,
+                        "prompt_name": resolved_prompt.name,
+                        "prompt_source": resolved_prompt.source,
+                    },
+                    level="ERROR",
+                    status_message=str(exc),
+                )
+            raise
+
+        if self._tracer and generation:
+            self._tracer.end_span(
+                generation,
+                {"raw_output": raw, "subtask_count": len(subtasks)},
+                metadata={
+                    "runtime": self.runtime,
+                    "model": self.model,
+                    "prompt_name": resolved_prompt.name,
+                    "prompt_source": resolved_prompt.source,
+                    "prompt_version": resolved_prompt.version,
+                },
+            )
+        return subtasks
 
     def _build_prompt(self, task: str, context: str) -> str:
         return SYSTEM_PROMPT_TEMPLATE.format(task=task, context=context or "No additional context provided.")

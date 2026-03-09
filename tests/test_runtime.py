@@ -13,6 +13,7 @@ from horse_fish.agents.runtime import (
     KimiRuntime,
     OpenCodeRuntime,
     PiRuntime,
+    extract_runtime_observations,
 )
 
 
@@ -57,6 +58,14 @@ class TestClaudeRuntime:
         assert pattern.search("bypass permissions") is not None
         # Should not match loading messages
         assert pattern.search("Loading...") is None
+
+    def test_extract_runtime_observations_finds_tool_and_prompt(self) -> None:
+        """Claude pane output should expose tool calls and runtime prompts."""
+        output = "⏺ Bash(git status --short)\nConfirm to bypass permissions?\n"
+        observations = extract_runtime_observations("claude", output)
+
+        assert any(o.kind == "tool" and o.name == "Bash" for o in observations)
+        assert any(o.kind == "prompt" and o.name == "permission_prompt" for o in observations)
 
 
 class TestPiRuntime:
@@ -203,6 +212,10 @@ class TestDroidRuntime:
         runtime = DroidRuntime()
         assert runtime.post_ready_commands("glm-4.7") == []
         assert runtime.post_ready_commands("") == []
+
+    def test_extract_runtime_observations_finds_login_prompt(self) -> None:
+        observations = extract_runtime_observations("droid", "> Login\n")
+        assert any(o.kind == "prompt" and o.name == "login_prompt" for o in observations)
 
     def test_droid_in_runtime_registry(self) -> None:
         assert "droid" in RUNTIME_REGISTRY

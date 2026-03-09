@@ -26,8 +26,8 @@ def make_worktree_info(name: str = "agent-1") -> WorktreeInfo:
     return WorktreeInfo(path=f"/tmp/worktrees/{name}", branch=f"horse-fish/{name}", name=name)
 
 
-def make_pool(store: Store, tmux: MagicMock, worktrees: MagicMock) -> AgentPool:
-    return AgentPool(store=store, tmux=tmux, worktrees=worktrees)
+def make_pool(store: Store, tmux: MagicMock, worktrees: MagicMock, tracer: MagicMock | None = None) -> AgentPool:
+    return AgentPool(store=store, tmux=tmux, worktrees=worktrees, tracer=tracer)
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +100,26 @@ async def test_spawn_waits_for_ready_pattern() -> None:
 
 
 @pytest.mark.asyncio
+async def test_spawn_traces_spawn_and_ready_spans() -> None:
+    """spawn should emit dedicated spans for agent startup and readiness."""
+    store = make_store()
+    tmux = MagicMock()
+    tmux.spawn = AsyncMock(return_value=1234)
+    tmux.capture_pane = AsyncMock(side_effect=["Loading...\n", "Loading...\n❯ \n"])
+    worktrees = MagicMock()
+    worktrees.create = AsyncMock(return_value=make_worktree_info("agent-1"))
+    tracer = MagicMock()
+    tracer.span.side_effect = [MagicMock(name="spawn-span"), MagicMock(name="ready-span")]
+
+    pool = make_pool(store, tmux, worktrees, tracer=tracer)
+    await pool.spawn("agent-1", "claude", "claude-sonnet-4-6", "builder")
+
+    span_names = [call.args[1] for call in tracer.span.call_args_list]
+    assert span_names == ["agent.spawn", "agent.wait_for_ready"]
+    assert tracer.end_span.call_count == 2
+
+
+@pytest.mark.asyncio
 async def test_spawn_raises_on_ready_timeout() -> None:
     """Test that spawn raises RuntimeError when ready timeout is exceeded."""
     store = make_store()
@@ -140,6 +160,35 @@ async def test_spawn_raises_on_ready_timeout() -> None:
             await pool.spawn("agent-1", "claude", "claude-sonnet-4-6", "builder")
     finally:
         runtime.RUNTIME_REGISTRY["claude"] = original_registry_entry
+
+
+@pytest.mark.asyncio
+async def test_respawn_traces_respawn_and_ready_spans() -> None:
+    """respawn should emit respawn and readiness spans."""
+    store = make_store()
+    tmux = MagicMock()
+    tmux.spawn = AsyncMock(return_value=9)
+    tmux.send_keys = AsyncMock()
+    tmux.capture_pane = AsyncMock(side_effect=["Ready\n❯ \n", "Ready\n❯ \n"])
+    tmux.kill_session = AsyncMock()
+    worktrees = MagicMock()
+    worktrees.create = AsyncMock(return_value=make_worktree_info())
+    tracer = MagicMock()
+    tracer.span.side_effect = [
+        MagicMock(name="spawn-span"),
+        MagicMock(name="spawn-ready-span"),
+        MagicMock(name="respawn-span"),
+        MagicMock(name="respawn-ready-span"),
+    ]
+
+    pool = make_pool(store, tmux, worktrees, tracer=tracer)
+    slot = await pool.spawn("agent-1", "claude", "model", "builder")
+
+    await pool.respawn(slot.id)
+
+    span_names = [call.args[1] for call in tracer.span.call_args_list]
+    assert span_names == ["agent.spawn", "agent.wait_for_ready", "agent.respawn", "agent.wait_for_ready"]
+    assert tracer.end_span.call_count == 4
 
 
 @pytest.mark.asyncio
@@ -266,6 +315,58 @@ async def test_send_task_persists_task_id() -> None:
 
 
 @pytest.mark.asyncio
+async def test_send_task_traces_agent_prompt_generation() -> None:
+    """Task prompts should emit a Langfuse generation when tracer is configured."""
+    store = make_store()
+    tmux = MagicMock()
+    tmux.spawn = AsyncMock(return_value=9)
+    tmux.send_keys = AsyncMock()
+    tmux.capture_pane = AsyncMock(return_value="Ready\n> \n")
+    worktrees = MagicMock()
+    worktrees.create = AsyncMock(return_value=make_worktree_info())
+    tracer = MagicMock()
+    tracer.get_prompt.return_value = None
+    tracer.generation.return_value = MagicMock()
+
+    pool = make_pool(store, tmux, worktrees, tracer=tracer)
+    slot = await pool.spawn("agent-1", "copilot", "gpt-5.4", "builder")
+
+    await pool.send_task(slot.id, "implement feature X", task_id="subtask-1")
+
+    tracer.generation.assert_called_once()
+    assert tracer.generation.call_args.args[1] == "agent.task_prompt"
+    generation_end_calls = [
+        call for call in tracer.end_span.call_args_list if call.args[0] is tracer.generation.return_value
+    ]
+    assert len(generation_end_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_send_task_fix_prompt_uses_fix_template() -> None:
+    """Fix prompts should resolve through the Langfuse-managed fix prompt path."""
+    store = make_store()
+    tmux = MagicMock()
+    tmux.spawn = AsyncMock(return_value=9)
+    tmux.send_keys = AsyncMock()
+    tmux.capture_pane = AsyncMock(return_value="Ready\n> \n")
+    worktrees = MagicMock()
+    worktrees.create = AsyncMock(return_value=make_worktree_info())
+    tracer = MagicMock()
+    tracer.get_prompt.return_value = None
+    tracer.generation.return_value = MagicMock()
+
+    pool = make_pool(store, tmux, worktrees, tracer=tracer)
+    slot = await pool.spawn("agent-1", "copilot", "gpt-5.4", "builder")
+
+    await pool.send_task(slot.id, "ruff-check: F401 unused import", prompt_kind="fix")
+
+    sent_prompt = tmux.send_keys.call_args[0][1]
+    assert "Your previous changes failed the following quality gates" in sent_prompt
+    assert "F401 unused import" in sent_prompt
+    assert tracer.generation.call_args.args[1] == "agent.fix_prompt"
+
+
+@pytest.mark.asyncio
 async def test_collect_result_returns_correct_subtask_id() -> None:
     """Test that collect_result returns the correct subtask_id when task_id is set."""
     store = make_store()
@@ -332,6 +433,33 @@ async def test_check_status_returns_idle_when_alive() -> None:
 
 
 @pytest.mark.asyncio
+async def test_check_status_traces_agent_probe() -> None:
+    """check_status should emit an agent-level status probe span."""
+    store = make_store()
+    tmux = MagicMock()
+    tmux.spawn = AsyncMock(return_value=5)
+    tmux.is_alive = AsyncMock(return_value=True)
+    tmux.capture_pane = AsyncMock(return_value="Ready\n❯ \n")
+    worktrees = MagicMock()
+    worktrees.create = AsyncMock(return_value=make_worktree_info())
+    tracer = MagicMock()
+    tracer.span.side_effect = [
+        MagicMock(name="spawn-span"),
+        MagicMock(name="ready-span"),
+        MagicMock(name="status-span"),
+    ]
+
+    pool = make_pool(store, tmux, worktrees, tracer=tracer)
+    slot = await pool.spawn("agent-1", "claude", "model", "builder")
+
+    state = await pool.check_status(slot.id)
+
+    assert state == AgentState.idle
+    assert tracer.span.call_args_list[-1].args[1] == "agent.check_status"
+    assert tracer.end_span.call_args_list[-1].args[1] == {"alive": True, "state": "idle"}
+
+
+@pytest.mark.asyncio
 async def test_check_status_marks_dead_when_session_gone() -> None:
     store = make_store()
     tmux = MagicMock()
@@ -376,6 +504,186 @@ async def test_collect_result_returns_subtask_result_with_output_and_diff() -> N
     assert result.output == "build success\n"
     assert result.diff == "diff --git a/foo.py"
     assert result.duration_seconds >= 0
+
+
+@pytest.mark.asyncio
+async def test_collect_result_traces_execution_probe() -> None:
+    """collect_result should emit output and diff metadata for execution probes."""
+    store = make_store()
+    tmux = MagicMock()
+    tmux.spawn = AsyncMock(return_value=7)
+    tmux.capture_pane = AsyncMock(side_effect=["Ready\n❯ \n", "build success\n"])
+    worktrees = MagicMock()
+    worktrees.create = AsyncMock(return_value=make_worktree_info())
+    worktrees.get_diff = AsyncMock(return_value="diff --git a/foo.py")
+    tracer = MagicMock()
+    tracer.span.side_effect = [
+        MagicMock(name="spawn-span"),
+        MagicMock(name="ready-span"),
+        MagicMock(name="result-span"),
+    ]
+
+    pool = make_pool(store, tmux, worktrees, tracer=tracer)
+    slot = await pool.spawn("agent-1", "claude", "model", "builder")
+
+    result = await pool.collect_result(slot.id)
+
+    assert result.success is True
+    assert tracer.span.call_args_list[-1].args[1] == "agent.collect_result"
+    end_call = tracer.end_span.call_args_list[-1]
+    assert end_call.args[1] == {"success": True, "has_diff": True, "has_output": True}
+    assert end_call.kwargs["metadata"]["output_chars"] == len("build success\n")
+    assert end_call.kwargs["metadata"]["diff_chars"] == len("diff --git a/foo.py")
+
+
+@pytest.mark.asyncio
+async def test_collect_result_runtime_observations_include_subtask_context() -> None:
+    """Runtime output observations should carry the active orchestrator subtask context."""
+    store = make_store()
+    tmux = MagicMock()
+    tmux.spawn = AsyncMock(return_value=7)
+    tmux.send_keys = AsyncMock()
+    tmux.capture_pane = AsyncMock(
+        side_effect=[
+            "Ready\n❯ \n",
+            "⏺ Bash(git status --short)\nConfirm to bypass permissions?\n",
+        ]
+    )
+    worktrees = MagicMock()
+    worktrees.create = AsyncMock(return_value=make_worktree_info())
+    worktrees.get_diff = AsyncMock(return_value="")
+    tracer = MagicMock()
+    tracer.span.side_effect = [
+        MagicMock(name="spawn-span"),
+        MagicMock(name="ready-span"),
+        MagicMock(name="result-span"),
+        MagicMock(name="runtime-tool-span"),
+        MagicMock(name="runtime-prompt-span"),
+    ]
+
+    pool = make_pool(store, tmux, worktrees, tracer=tracer)
+    slot = await pool.spawn("agent-1", "claude", "model", "builder")
+    await pool.send_task(
+        slot.id,
+        "implement feature X",
+        task_id="subtask-1",
+        run_id="run-1",
+        subtask_description="Implement feature X",
+    )
+
+    await pool.collect_result(slot.id)
+
+    runtime_calls = [call for call in tracer.span.call_args_list if call.args[1].startswith("agent.runtime_")]
+    assert runtime_calls
+    for call in runtime_calls:
+        metadata = call.args[2]
+        assert metadata["run_id"] == "run-1"
+        assert metadata["subtask_id"] == "subtask-1"
+        assert metadata["subtask_description"] == "Implement feature X"
+        assert metadata["prompt_kind"] == "task"
+
+
+@pytest.mark.asyncio
+async def test_runtime_observation_summary_counts_deduped_events() -> None:
+    """runtime_observation_summary should aggregate deduped tool/prompt events by run."""
+    store = make_store()
+    tmux = MagicMock()
+    tmux.spawn = AsyncMock(return_value=7)
+    tmux.send_keys = AsyncMock()
+    tmux.capture_pane = AsyncMock(
+        side_effect=[
+            "Ready\n❯ \n",
+            "⏺ Bash(git status --short)\nConfirm to bypass permissions?\n",
+            "⏺ Bash(git status --short)\nConfirm to bypass permissions?\n",
+        ]
+    )
+    worktrees = MagicMock()
+    worktrees.create = AsyncMock(return_value=make_worktree_info())
+    worktrees.get_diff = AsyncMock(return_value="")
+    tracer = MagicMock()
+
+    pool = make_pool(store, tmux, worktrees, tracer=tracer)
+    slot = await pool.spawn("agent-1", "claude", "model", "builder")
+    await pool.send_task(
+        slot.id,
+        "implement feature X",
+        task_id="subtask-1",
+        run_id="run-1",
+        subtask_description="Implement feature X",
+    )
+
+    await pool.collect_result(slot.id)
+    await pool.collect_result(slot.id)
+
+    summary = pool.runtime_observation_summary("run-1")
+    assert summary["total_count"] == 2
+    assert summary["tool_count"] == 1
+    assert summary["prompt_count"] == 1
+    assert summary["first_observed_at"] is not None
+    assert summary["last_observed_at"] is not None
+    assert summary["subtasks_with_runtime_observations"] == 1
+    assert summary["subtask_ids"] == ["subtask-1"]
+    assert summary["subtask_breakdown"] == [
+        {
+            "subtask_id": "subtask-1",
+            "count": 2,
+            "tool_count": 1,
+            "prompt_count": 1,
+            "subtask_description": "Implement feature X",
+            "prompt_kinds": {"task": 2},
+            "observation_names": {"Bash": 1, "permission_prompt": 1},
+            "first_observed_at": summary["subtask_breakdown"][0]["first_observed_at"],
+            "last_observed_at": summary["subtask_breakdown"][0]["last_observed_at"],
+            "latest_excerpt": "Confirm to bypass permissions?",
+        }
+    ]
+    assert summary["subtask_breakdown"][0]["first_observed_at"] is not None
+    assert summary["subtask_breakdown"][0]["last_observed_at"] is not None
+    assert summary["runtimes"] == {"claude": 2}
+    assert summary["observation_names"]["Bash"] == 1
+    assert summary["observation_names"]["permission_prompt"] == 1
+    assert len(summary["recent_observations"]) == 2
+    assert summary["recent_observations"][-1]["observation_name"] == "permission_prompt"
+    assert summary["recent_observations"][-1]["excerpt"] == "Confirm to bypass permissions?"
+    assert summary["recent_observations"][-1]["observed_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_collect_result_emits_runtime_tool_and_prompt_spans() -> None:
+    """collect_result should emit runtime-derived tool and prompt observations once."""
+    store = make_store()
+    tmux = MagicMock()
+    tmux.spawn = AsyncMock(return_value=7)
+    tmux.capture_pane = AsyncMock(
+        side_effect=[
+            "Ready\n❯ \n",
+            "⏺ Bash(git status --short)\nConfirm to bypass permissions?\n",
+            "⏺ Bash(git status --short)\nConfirm to bypass permissions?\n",
+        ]
+    )
+    worktrees = MagicMock()
+    worktrees.create = AsyncMock(return_value=make_worktree_info())
+    worktrees.get_diff = AsyncMock(return_value="")
+    tracer = MagicMock()
+    tracer.span.side_effect = [
+        MagicMock(name="spawn-span"),
+        MagicMock(name="ready-span"),
+        MagicMock(name="result-span-1"),
+        MagicMock(name="runtime-tool-span"),
+        MagicMock(name="runtime-prompt-span"),
+        MagicMock(name="result-span-2"),
+    ]
+
+    pool = make_pool(store, tmux, worktrees, tracer=tracer)
+    slot = await pool.spawn("agent-1", "claude", "model", "builder")
+
+    await pool.collect_result(slot.id)
+    await pool.collect_result(slot.id)
+
+    span_names = [call.args[1] for call in tracer.span.call_args_list]
+    assert span_names.count("agent.runtime_tool") == 1
+    assert span_names.count("agent.runtime_prompt") == 1
+    assert span_names.count("agent.collect_result") == 2
 
 
 @pytest.mark.asyncio

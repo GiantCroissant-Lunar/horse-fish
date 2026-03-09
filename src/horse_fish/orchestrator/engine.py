@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 from datetime import UTC, datetime
+from typing import Any
 
 from horse_fish.agents.pool import AgentPool
 from horse_fish.dispatch.selector import AgentSelector
@@ -76,12 +77,188 @@ class Orchestrator:
         self._stall_timeout = stall_timeout_seconds
         self._concurrency_limits = concurrency_limits or {}
         self._store = store
-
+        self._active_trace = None
+        self._execution_retry_events = 0
+        self._execution_retry_exhausted = 0
+        self._gate_retry_events = 0
+        self._gate_retry_exhausted = 0
+        self._merge_conflicts: list[dict[str, object]] = []
         self._handlers: dict[RunState, _Handler] = {
             RunState.planning: self._plan,
             RunState.executing: self._execute,
             RunState.reviewing: self._review,
             RunState.merging: self._merge,
+        }
+
+    def _subtask_span(
+        self,
+        name: str,
+        subtask: Subtask,
+        **metadata,
+    ):
+        """Create a best-effort span for a specific subtask operation."""
+        if not self._tracer or not self._active_trace:
+            return None
+        base_metadata = {
+            "subtask_id": subtask.id,
+            "description": subtask.description,
+            "agent_id": subtask.agent,
+            "retry_count": subtask.retry_count,
+            "gate_retry_count": subtask.gate_retry_count,
+        }
+        base_metadata.update(metadata)
+        return self._tracer.span(self._active_trace, name, base_metadata)
+
+    def _reset_trace_metrics(self) -> None:
+        """Reset per-run observability counters before a new run starts."""
+        self._execution_retry_events = 0
+        self._execution_retry_exhausted = 0
+        self._gate_retry_events = 0
+        self._gate_retry_exhausted = 0
+        self._merge_conflicts = []
+
+    def _record_merge_conflict(
+        self,
+        subtask_id: str,
+        *,
+        branch: str | None = None,
+        conflict_files: list[str] | None = None,
+    ) -> None:
+        """Store merge conflict details for later Langfuse scoring."""
+        self._merge_conflicts.append(
+            {
+                "subtask_id": subtask_id,
+                "branch": branch,
+                "conflict_files": conflict_files or [],
+            }
+        )
+
+    def _score_run_outcomes(self, run: Run, trace) -> None:
+        """Emit run-level Langfuse scores after the state machine finishes."""
+        if not self._tracer or not trace:
+            return
+        runtime_summary = self._pool.runtime_observation_summary(run.id)
+        subtask_coverage = (
+            runtime_summary["subtasks_with_runtime_observations"] / len(run.subtasks) if run.subtasks else 0.0
+        )
+
+        self._tracer.score_trace(
+            trace,
+            "run_success",
+            1.0 if run.state == RunState.completed else 0.0,
+            data_type="NUMERIC",
+            metadata={"status": run.state.value},
+        )
+        self._tracer.score_trace(
+            trace,
+            "completed_subtasks",
+            float(sum(1 for s in run.subtasks if s.state == SubtaskState.done)),
+            data_type="NUMERIC",
+        )
+        self._tracer.score_trace(
+            trace,
+            "failed_subtasks",
+            float(sum(1 for s in run.subtasks if s.state == SubtaskState.failed)),
+            data_type="NUMERIC",
+        )
+        self._tracer.score_trace(
+            trace,
+            "execution_retry_count",
+            float(self._execution_retry_events),
+            data_type="NUMERIC",
+            metadata={"retry_exhausted_count": self._execution_retry_exhausted},
+        )
+        self._tracer.score_trace(
+            trace,
+            "gate_retry_count",
+            float(self._gate_retry_events),
+            data_type="NUMERIC",
+            metadata={"retry_exhausted_count": self._gate_retry_exhausted},
+        )
+        self._tracer.score_trace(
+            trace,
+            "retry_exhausted_count",
+            float(self._execution_retry_exhausted + self._gate_retry_exhausted),
+            data_type="NUMERIC",
+            metadata={
+                "execution_retry_exhausted_count": self._execution_retry_exhausted,
+                "gate_retry_exhausted_count": self._gate_retry_exhausted,
+            },
+        )
+        self._tracer.score_trace(
+            trace,
+            "merge_conflict_count",
+            float(len(self._merge_conflicts)),
+            data_type="NUMERIC",
+            metadata={"conflicts": self._merge_conflicts},
+        )
+        self._tracer.score_trace(
+            trace,
+            "merge_conflict",
+            "conflict" if self._merge_conflicts else "clean",
+            data_type="CATEGORICAL",
+            metadata={"count": len(self._merge_conflicts)},
+        )
+        self._tracer.score_trace(
+            trace,
+            "runtime_observation_count",
+            float(runtime_summary["total_count"]),
+            data_type="NUMERIC",
+            metadata={
+                "tool_count": runtime_summary["tool_count"],
+                "prompt_count": runtime_summary["prompt_count"],
+                "first_observed_at": runtime_summary["first_observed_at"],
+                "last_observed_at": runtime_summary["last_observed_at"],
+                "subtasks_with_runtime_observations": runtime_summary["subtasks_with_runtime_observations"],
+                "subtask_ids": runtime_summary["subtask_ids"],
+                "subtask_breakdown": runtime_summary["subtask_breakdown"],
+                "runtimes": runtime_summary["runtimes"],
+                "observation_names": runtime_summary["observation_names"],
+                "recent_observations": runtime_summary["recent_observations"],
+            },
+        )
+        self._tracer.score_trace(
+            trace,
+            "runtime_tool_observation_count",
+            float(runtime_summary["tool_count"]),
+            data_type="NUMERIC",
+        )
+        self._tracer.score_trace(
+            trace,
+            "runtime_prompt_observation_count",
+            float(runtime_summary["prompt_count"]),
+            data_type="NUMERIC",
+        )
+        self._tracer.score_trace(
+            trace,
+            "runtime_observation_subtask_coverage",
+            subtask_coverage,
+            data_type="NUMERIC",
+            metadata={
+                "subtasks_with_runtime_observations": runtime_summary["subtasks_with_runtime_observations"],
+                "total_subtasks": len(run.subtasks),
+                "subtask_ids": runtime_summary["subtask_ids"],
+                "last_observed_at": runtime_summary["last_observed_at"],
+            },
+        )
+
+    def _trace_output(self, run: Run) -> dict[str, Any]:
+        """Build the final trace output payload."""
+        runtime_summary = self._pool.runtime_observation_summary(run.id)
+        return {
+            "status": run.state.value,
+            "subtask_count": len(run.subtasks),
+            "completed_subtasks": sum(1 for s in run.subtasks if s.state == SubtaskState.done),
+            "failed_subtasks": sum(1 for s in run.subtasks if s.state == SubtaskState.failed),
+            "runtime_observations": {
+                "total_count": runtime_summary["total_count"],
+                "tool_count": runtime_summary["tool_count"],
+                "prompt_count": runtime_summary["prompt_count"],
+                "first_observed_at": runtime_summary["first_observed_at"],
+                "last_observed_at": runtime_summary["last_observed_at"],
+                "subtask_ids": runtime_summary["subtask_ids"],
+                "recent_observations": runtime_summary["recent_observations"],
+            },
         }
 
     def _persist_run(self, run: Run) -> None:
@@ -118,27 +295,52 @@ class Orchestrator:
         self._persist_run(run)
         logger.info("Starting run %s for task: %s", run.id, task)
 
-        trace = self._tracer.trace_run(run.id, task) if self._tracer else None
+        trace = (
+            self._tracer.trace_run(
+                run.id,
+                task,
+                metadata={
+                    "runtime": self._runtime,
+                    "model": self._model,
+                    "max_agents": self._max_agents,
+                },
+                tags=[f"runtime:{self._runtime}"] + ([f"model:{self._model}"] if self._model else []),
+            )
+            if self._tracer
+            else None
+        )
+        self._active_trace = trace
+        self._reset_trace_metrics()
 
-        while run.state not in (RunState.completed, RunState.failed):
-            handler = self._handlers.get(run.state)
-            if handler is None:
-                raise OrchestratorError(f"No handler for state {run.state}")
+        try:
+            while run.state not in (RunState.completed, RunState.failed):
+                handler = self._handlers.get(run.state)
+                if handler is None:
+                    raise OrchestratorError(f"No handler for state {run.state}")
 
-            span = self._tracer.span(trace, run.state.value) if self._tracer and trace else None
-            run = await handler(run)
-            if self._tracer and span:
-                self._tracer.end_span(span, {"state": run.state.value})
+                span = self._tracer.span(trace, run.state.value) if self._tracer and trace else None
+                run = await handler(run)
+                if self._tracer and span:
+                    self._tracer.end_span(
+                        span,
+                        {"state": run.state.value},
+                        metadata={"subtask_count": len(run.subtasks)},
+                    )
 
+                self._persist_run(run)
+                logger.info("Run %s transitioned to %s", run.id, run.state)
+        finally:
+            run.completed_at = datetime.now(UTC)
             self._persist_run(run)
-            logger.info("Run %s transitioned to %s", run.id, run.state)
 
-        run.completed_at = datetime.now(UTC)
-        self._persist_run(run)
-
-        if self._tracer and trace:
-            self._tracer.end_trace(trace, run.state.value)
-
+            if self._tracer and trace:
+                self._score_run_outcomes(run, trace)
+                self._tracer.end_trace(
+                    trace,
+                    run.state.value,
+                    output=self._trace_output(run),
+                )
+            self._active_trace = None
         if run.state == RunState.completed:
             await self._learn(run)
 
@@ -216,6 +418,13 @@ class Orchestrator:
             logger.warning("Subtask %s stalled (%.0fs since last activity)", subtask.id, elapsed)
 
             agent_id = agent_map.get(subtask.id)
+            stall_span = self._subtask_span(
+                "subtask.stall_recovery",
+                subtask,
+                elapsed_seconds=elapsed,
+                timeout_seconds=timeout,
+                stalled_agent_id=agent_id,
+            )
             if agent_id:
                 try:
                     await self._pool.release(agent_id)
@@ -224,6 +433,7 @@ class Orchestrator:
 
             if subtask.retry_count < subtask.max_retries:
                 subtask.retry_count += 1
+                self._execution_retry_events += 1
                 subtask.state = SubtaskState.pending
                 subtask.agent = None
                 subtask.last_activity_at = None
@@ -232,13 +442,35 @@ class Orchestrator:
                 retried += 1
                 self._persist_subtask(subtask, run.id)
                 logger.info("Retrying subtask %s (attempt %d/%d)", subtask.id, subtask.retry_count, subtask.max_retries)
+                if stall_span:
+                    self._tracer.end_span(
+                        stall_span,
+                        {"action": "retry"},
+                        metadata={
+                            "retry_count": subtask.retry_count,
+                            "max_retries": subtask.max_retries,
+                        },
+                        level="WARNING",
+                    )
             else:
+                self._execution_retry_exhausted += 1
                 subtask.state = SubtaskState.failed
                 if subtask.id in agent_map:
                     del agent_map[subtask.id]
                 failed += 1
                 self._persist_subtask(subtask, run.id)
                 logger.error("Subtask %s failed after %d retries", subtask.id, subtask.max_retries)
+                if stall_span:
+                    self._tracer.end_span(
+                        stall_span,
+                        {"action": "failed"},
+                        metadata={
+                            "retry_count": subtask.retry_count,
+                            "max_retries": subtask.max_retries,
+                        },
+                        level="ERROR",
+                        status_message="stall recovery exhausted retries",
+                    )
 
         return retried + failed
 
@@ -294,6 +526,12 @@ class Orchestrator:
                     continue
 
                 try:
+                    dispatch_span = self._subtask_span(
+                        "subtask.dispatch",
+                        subtask,
+                        deps=subtask.deps,
+                        files_hint=subtask.files_hint,
+                    )
                     # Use selector if available, otherwise spawn directly
                     if self._selector:
                         available_agents = [a for a in self._pool.list_agents() if a.state == AgentState.idle]
@@ -309,17 +547,37 @@ class Orchestrator:
                             model=self._model,
                             capability="builder",
                         )
-                    await self._pool.send_task(slot.id, subtask.description, task_id=subtask.id)
+                    await self._pool.send_task(
+                        slot.id,
+                        subtask.description,
+                        task_id=subtask.id,
+                        run_id=run.id,
+                        subtask_description=subtask.description,
+                    )
                     subtask.state = SubtaskState.running
                     subtask.agent = slot.id
                     subtask.last_activity_at = datetime.now(UTC)
                     agent_map[subtask.id] = slot.id
                     active_count += 1
                     self._persist_subtask(subtask, run.id)
+                    if dispatch_span:
+                        self._tracer.end_span(
+                            dispatch_span,
+                            {"state": subtask.state.value},
+                            metadata={"selected_agent": slot.id, "runtime": slot.runtime, "model": slot.model},
+                        )
                 except Exception as exc:
                     logger.error("Failed to dispatch subtask %s: %s", subtask.id, exc)
                     subtask.state = SubtaskState.failed
                     self._persist_subtask(subtask, run.id)
+                    if self._tracer and dispatch_span:
+                        self._tracer.end_span(
+                            dispatch_span,
+                            {"error": str(exc)},
+                            metadata={"state": subtask.state.value},
+                            level="ERROR",
+                            status_message=str(exc),
+                        )
 
             # Check if all subtasks are terminal
             if all(s.state in (SubtaskState.done, SubtaskState.failed) for s in run.subtasks):
@@ -345,16 +603,25 @@ class Orchestrator:
                 status = await self._pool.check_status(agent_id)
                 if status.value == "dead":
                     # Agent died — check if it produced output
+                    collect_span = self._subtask_span("subtask.collect_result", subtask, status=status.value)
                     result = await self._pool.collect_result(agent_id)
                     subtask.result = result
                     self._stamp_provenance(result, run, agent_id)
                     subtask.state = SubtaskState.done if result.success else SubtaskState.failed
                     self._persist_subtask(subtask, run.id)
                     active_count -= 1
+                    if collect_span:
+                        self._tracer.end_span(
+                            collect_span,
+                            {"success": result.success, "has_diff": bool(result.diff)},
+                            metadata={"duration_seconds": result.duration_seconds},
+                            level="DEFAULT" if result.success else "WARNING",
+                        )
                     continue
 
                 # Check for new commits in worktree (primary completion signal)
                 try:
+                    collect_span = self._subtask_span("subtask.poll_result", subtask, status=status.value)
                     result = await self._pool.collect_result(agent_id)
                     if result.diff:
                         subtask.result = result
@@ -363,6 +630,14 @@ class Orchestrator:
                         subtask.last_activity_at = datetime.now(UTC)
                         self._persist_subtask(subtask, run.id)
                         active_count -= 1
+                        if collect_span:
+                            self._tracer.end_span(
+                                collect_span,
+                                {"success": True, "has_diff": True},
+                                metadata={"duration_seconds": result.duration_seconds},
+                            )
+                    elif collect_span:
+                        self._tracer.end_span(collect_span, {"success": False, "has_diff": False})
                 except Exception:
                     pass
 
@@ -386,14 +661,28 @@ class Orchestrator:
         """
         all_passed = True
         needs_re_execute = False
+        reviewed_subtasks = 0
+        passed_subtasks = 0
+        failed_subtasks = 0
+        retried_subtasks = 0
 
         for subtask in run.subtasks:
             if subtask.state != SubtaskState.done or not subtask.agent:
                 continue
+            reviewed_subtasks += 1
 
+            review_span = self._subtask_span("subtask.review", subtask)
+            gate_retry_span = None
             try:
                 slot = self._pool._get_slot(subtask.agent)
                 if not slot.worktree_path:
+                    if review_span:
+                        self._tracer.end_span(
+                            review_span,
+                            {"skipped": True},
+                            metadata={"reason": "missing worktree_path"},
+                            level="WARNING",
+                        )
                     continue
 
                 # Auto-fix lint before running gates
@@ -403,40 +692,89 @@ class Orchestrator:
 
                 results = await self._gates.run_all(slot.worktree_path)
                 if self._gates.all_passed(results):
+                    passed_subtasks += 1
+                    if review_span:
+                        self._tracer.end_span(
+                            review_span,
+                            {"passed": True},
+                            metadata={"gate_count": len(results)},
+                        )
                     continue
 
                 # Gates failed — try retry
                 gate_output = "; ".join(f"{r.gate}: {r.output}" for r in results if not r.passed)
                 logger.warning("Subtask %s failed gates: %s", subtask.id, gate_output)
+                gate_retry_span = self._subtask_span(
+                    "subtask.gate_retry",
+                    subtask,
+                    gate_output=gate_output,
+                )
 
                 if subtask.gate_retry_count < subtask.max_gate_retries:
                     # Check agent is still alive; respawn if dead
                     agent_status = await self._pool.check_status(subtask.agent)
+                    respawned = False
                     if agent_status == AgentState.dead:
                         try:
                             logger.info("Respawning dead agent for subtask %s gate retry", subtask.id)
                             await self._pool.respawn(subtask.agent)
+                            respawned = True
                         except Exception as exc:
                             logger.error("Failed to respawn agent for subtask %s: %s", subtask.id, exc)
                             subtask.state = SubtaskState.failed
                             self._persist_subtask(subtask, run.id)
                             all_passed = False
+                            if review_span:
+                                self._tracer.end_span(
+                                    review_span,
+                                    {"error": str(exc)},
+                                    metadata={"passed": False},
+                                    level="ERROR",
+                                    status_message=str(exc),
+                                )
+                            if self._tracer and gate_retry_span:
+                                self._tracer.end_span(
+                                    gate_retry_span,
+                                    {"error": str(exc)},
+                                    metadata={"respawned": False},
+                                    level="ERROR",
+                                    status_message=str(exc),
+                                )
                             continue
 
-                    # Send fix prompt to agent
-                    from horse_fish.agents.prompt import build_fix_prompt
-
-                    fix_prompt = build_fix_prompt(
-                        gate_output=gate_output,
-                        worktree_path=slot.worktree_path,
-                        branch=slot.branch or "",
+                    await self._pool.send_task(
+                        subtask.agent,
+                        gate_output,
+                        task_id=subtask.id,
+                        prompt_kind="fix",
+                        run_id=run.id,
+                        subtask_description=subtask.description,
                     )
-                    await self._pool.send_task(subtask.agent, fix_prompt, raw=True)
                     subtask.state = SubtaskState.running
                     subtask.gate_retry_count += 1
+                    self._gate_retry_events += 1
                     subtask.last_activity_at = datetime.now(UTC)
                     self._persist_subtask(subtask, run.id)
                     needs_re_execute = True
+                    retried_subtasks += 1
+                    if review_span:
+                        self._tracer.end_span(
+                            review_span,
+                            {"passed": False, "retrying": True},
+                            metadata={"gate_output": gate_output},
+                            level="WARNING",
+                        )
+                    if self._tracer and gate_retry_span:
+                        self._tracer.end_span(
+                            gate_retry_span,
+                            {"action": "retry"},
+                            metadata={
+                                "gate_retry_count": subtask.gate_retry_count,
+                                "max_gate_retries": subtask.max_gate_retries,
+                                "respawned": respawned,
+                            },
+                            level="WARNING",
+                        )
                     logger.info(
                         "Sent fix prompt to agent for subtask %s (gate retry %d/%d)",
                         subtask.id,
@@ -446,20 +784,91 @@ class Orchestrator:
                     continue
 
                 # No retries left
+                self._gate_retry_exhausted += 1
                 subtask.state = SubtaskState.failed
                 self._persist_subtask(subtask, run.id)
                 all_passed = False
+                failed_subtasks += 1
+                if review_span:
+                    self._tracer.end_span(
+                        review_span,
+                        {"passed": False, "retrying": False},
+                        metadata={"gate_output": gate_output},
+                        level="ERROR",
+                    )
+                if self._tracer and gate_retry_span:
+                    self._tracer.end_span(
+                        gate_retry_span,
+                        {"action": "failed"},
+                        metadata={
+                            "gate_retry_count": subtask.gate_retry_count,
+                            "max_gate_retries": subtask.max_gate_retries,
+                        },
+                        level="ERROR",
+                        status_message="gate retry exhausted",
+                    )
 
             except KeyError as exc:
                 logger.error("Review failed for subtask %s — agent slot not found: %s", subtask.id, exc)
                 subtask.state = SubtaskState.failed
                 self._persist_subtask(subtask, run.id)
                 all_passed = False
+                if self._tracer and review_span:
+                    self._tracer.end_span(
+                        review_span,
+                        {"error": str(exc)},
+                        metadata={"passed": False},
+                        level="ERROR",
+                        status_message=str(exc),
+                    )
+                if self._tracer and gate_retry_span:
+                    self._tracer.end_span(
+                        gate_retry_span,
+                        {"error": str(exc)},
+                        level="ERROR",
+                        status_message=str(exc),
+                    )
             except Exception as exc:
                 logger.error("Review failed for subtask %s: %s", subtask.id, exc, exc_info=True)
                 subtask.state = SubtaskState.failed
                 self._persist_subtask(subtask, run.id)
                 all_passed = False
+                failed_subtasks += 1
+                if self._tracer and gate_retry_span:
+                    self._tracer.end_span(
+                        gate_retry_span,
+                        {"error": str(exc)},
+                        level="ERROR",
+                        status_message=str(exc),
+                    )
+                if self._tracer and review_span:
+                    self._tracer.end_span(
+                        review_span,
+                        {"error": str(exc)},
+                        metadata={"passed": False},
+                        level="ERROR",
+                        status_message=str(exc),
+                    )
+
+        if self._tracer and self._active_trace and reviewed_subtasks:
+            self._tracer.score_trace(
+                self._active_trace,
+                "review_gate_pass_rate",
+                passed_subtasks / reviewed_subtasks,
+                data_type="NUMERIC",
+                metadata={
+                    "reviewed_subtasks": reviewed_subtasks,
+                    "passed_subtasks": passed_subtasks,
+                    "failed_subtasks": failed_subtasks,
+                    "retried_subtasks": retried_subtasks,
+                },
+            )
+            self._tracer.score_trace(
+                self._active_trace,
+                "review_status",
+                "retry" if needs_re_execute else ("pass" if all_passed else "fail"),
+                data_type="CATEGORICAL",
+            )
 
         if needs_re_execute:
             run.state = RunState.executing
@@ -476,12 +885,20 @@ class Orchestrator:
                 if subtask.state != SubtaskState.done or not subtask.agent:
                     continue
                 slot = self._pool._get_slot(subtask.agent)
+                merge_span = self._subtask_span("subtask.merge_queue", subtask, branch=slot.branch)
                 await self._merge_queue.enqueue(subtask.id, slot.name, slot.branch)
+                if merge_span:
+                    self._tracer.end_span(merge_span, {"enqueued": True}, metadata={"agent_name": slot.name})
 
             results = await self._merge_queue.process()
             for result in results:
                 if not result.success:
                     logger.error("Merge conflict for subtask %s", result.subtask_id)
+                    self._record_merge_conflict(
+                        result.subtask_id,
+                        branch=result.branch,
+                        conflict_files=result.conflict_files,
+                    )
                     run.state = RunState.failed
                     return run
         else:
@@ -490,18 +907,37 @@ class Orchestrator:
                 if subtask.state != SubtaskState.done or not subtask.agent:
                     continue
 
+                merge_span = None
                 try:
                     slot = self._pool._get_slot(subtask.agent)
+                    merge_span = self._subtask_span("subtask.merge", subtask, branch=slot.branch)
                     success = await self._pool._worktrees.merge(slot.name)
                     if not success:
                         logger.error("Merge conflict for subtask %s", subtask.id)
+                        self._record_merge_conflict(subtask.id, branch=slot.branch)
                         subtask.state = SubtaskState.failed
                         run.state = RunState.failed
+                        if merge_span:
+                            self._tracer.end_span(
+                                merge_span,
+                                {"success": False},
+                                level="ERROR",
+                                status_message="merge conflict",
+                            )
                         return run
+                    if merge_span:
+                        self._tracer.end_span(merge_span, {"success": True})
                 except Exception as exc:
                     logger.error("Merge failed for subtask %s: %s", subtask.id, exc)
                     subtask.state = SubtaskState.failed
                     run.state = RunState.failed
+                    if self._tracer and merge_span:
+                        self._tracer.end_span(
+                            merge_span,
+                            {"error": str(exc)},
+                            level="ERROR",
+                            status_message=str(exc),
+                        )
                     return run
 
         run.state = RunState.completed
