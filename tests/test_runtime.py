@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from horse_fish.agents.runtime import (
     RUNTIME_REGISTRY,
+    BashRuntime,
     ClaudeRuntime,
     CopilotRuntime,
     OpenCodeRuntime,
@@ -113,3 +114,24 @@ class TestOpenCodeRuntime:
         assert "opencode" in command
         assert "-m" in command
         assert "qwen3.5-plus" in command
+
+
+class TestBashRuntime:
+    """Tests for Bash runtime adapter."""
+
+    def test_bash_spawn_command(self) -> None:
+        """Bash spawn command returns 'bash'."""
+        runtime = BashRuntime()
+        command = runtime.build_spawn_command("any-model")
+        assert command == "bash"
+
+    def test_bash_build_env_empty(self) -> None:
+        """Bash build_env returns empty dict."""
+        runtime = BashRuntime()
+        env = runtime.build_env()
+        assert env == {}
+
+    def test_bash_in_runtime_registry(self) -> None:
+        """Bash runtime is registered in RUNTIME_REGISTRY."""
+        assert "bash" in RUNTIME_REGISTRY
+        assert isinstance(RUNTIME_REGISTRY["bash"], BashRuntime)
