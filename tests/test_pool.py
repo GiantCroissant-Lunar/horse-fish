@@ -433,6 +433,33 @@ async def test_check_status_returns_idle_when_alive() -> None:
 
 
 @pytest.mark.asyncio
+async def test_check_status_traces_agent_probe() -> None:
+    """check_status should emit an agent-level status probe span."""
+    store = make_store()
+    tmux = MagicMock()
+    tmux.spawn = AsyncMock(return_value=5)
+    tmux.is_alive = AsyncMock(return_value=True)
+    tmux.capture_pane = AsyncMock(return_value="Ready\n❯ \n")
+    worktrees = MagicMock()
+    worktrees.create = AsyncMock(return_value=make_worktree_info())
+    tracer = MagicMock()
+    tracer.span.side_effect = [
+        MagicMock(name="spawn-span"),
+        MagicMock(name="ready-span"),
+        MagicMock(name="status-span"),
+    ]
+
+    pool = make_pool(store, tmux, worktrees, tracer=tracer)
+    slot = await pool.spawn("agent-1", "claude", "model", "builder")
+
+    state = await pool.check_status(slot.id)
+
+    assert state == AgentState.idle
+    assert tracer.span.call_args_list[-1].args[1] == "agent.check_status"
+    assert tracer.end_span.call_args_list[-1].args[1] == {"alive": True, "state": "idle"}
+
+
+@pytest.mark.asyncio
 async def test_check_status_marks_dead_when_session_gone() -> None:
     store = make_store()
     tmux = MagicMock()
@@ -477,6 +504,36 @@ async def test_collect_result_returns_subtask_result_with_output_and_diff() -> N
     assert result.output == "build success\n"
     assert result.diff == "diff --git a/foo.py"
     assert result.duration_seconds >= 0
+
+
+@pytest.mark.asyncio
+async def test_collect_result_traces_execution_probe() -> None:
+    """collect_result should emit output and diff metadata for execution probes."""
+    store = make_store()
+    tmux = MagicMock()
+    tmux.spawn = AsyncMock(return_value=7)
+    tmux.capture_pane = AsyncMock(side_effect=["Ready\n❯ \n", "build success\n"])
+    worktrees = MagicMock()
+    worktrees.create = AsyncMock(return_value=make_worktree_info())
+    worktrees.get_diff = AsyncMock(return_value="diff --git a/foo.py")
+    tracer = MagicMock()
+    tracer.span.side_effect = [
+        MagicMock(name="spawn-span"),
+        MagicMock(name="ready-span"),
+        MagicMock(name="result-span"),
+    ]
+
+    pool = make_pool(store, tmux, worktrees, tracer=tracer)
+    slot = await pool.spawn("agent-1", "claude", "model", "builder")
+
+    result = await pool.collect_result(slot.id)
+
+    assert result.success is True
+    assert tracer.span.call_args_list[-1].args[1] == "agent.collect_result"
+    end_call = tracer.end_span.call_args_list[-1]
+    assert end_call.args[1] == {"success": True, "has_diff": True, "has_output": True}
+    assert end_call.kwargs["metadata"]["output_chars"] == len("build success\n")
+    assert end_call.kwargs["metadata"]["diff_chars"] == len("diff --git a/foo.py")
 
 
 @pytest.mark.asyncio

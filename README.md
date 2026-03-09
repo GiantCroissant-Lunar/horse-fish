@@ -110,6 +110,7 @@ Current tracing covers:
 - State spans for planning, executing, reviewing, and merging
 - Subtask operation spans for dispatch, result collection, review, stall recovery, gate retries, merge queueing, and merge
 - Agent lifecycle spans for spawn, respawn, and readiness waits
+- Agent execution probe spans for status checks and result collection
 - Generation observations for `smart_planner.classify` and `planner.decompose`
 - Generation observations for agent task prompts, fix prompts, and raw prompt sends
 - Langfuse-managed text prompts with local fallbacks for planner classify/decompose prompts
@@ -120,7 +121,7 @@ Current tracing covers:
 Recommended next Langfuse improvements:
 
 - Add planner-quality scores and evaluator feedback loops
-- Add prompt or tool-level observations inside long-running agent execution loops
+- Add prompt or tool-level observations from inside the agent runtime itself
 
 ## Project Structure
 

@@ -233,11 +233,37 @@ class AgentPool:
     async def check_status(self, agent_id: str) -> AgentState:
         """Return the agent's current state; mark dead if its tmux session is gone."""
         slot = self._get_slot(agent_id)
-        alive = await self._tmux.is_alive(slot.tmux_session)
-        if not alive and slot.state != AgentState.dead:
-            self._store.execute("UPDATE agents SET state = ? WHERE id = ?", (AgentState.dead, agent_id))
-            return AgentState.dead
-        return slot.state
+        status_span = self._trace_span(
+            "agent.check_status",
+            agent_id=slot.id,
+            agent_name=slot.name,
+            runtime=slot.runtime,
+            model=slot.model,
+            prior_state=slot.state.value,
+            task_id=slot.task_id,
+        )
+        try:
+            alive = await self._tmux.is_alive(slot.tmux_session)
+            next_state = AgentState.dead if (not alive and slot.state != AgentState.dead) else slot.state
+            if next_state == AgentState.dead and slot.state != AgentState.dead:
+                self._store.execute("UPDATE agents SET state = ? WHERE id = ?", (AgentState.dead, agent_id))
+            if self._tracer and status_span:
+                self._tracer.end_span(
+                    status_span,
+                    {"alive": alive, "state": next_state.value},
+                    metadata={"tmux_session": slot.tmux_session},
+                    level="WARNING" if not alive else None,
+                )
+            return next_state
+        except Exception as exc:
+            if self._tracer and status_span:
+                self._tracer.end_span(
+                    status_span,
+                    {"error": str(exc)},
+                    level="ERROR",
+                    status_message=str(exc),
+                )
+            raise
 
     async def respawn(self, agent_id: str) -> AgentSlot:
         """Re-spawn a dead agent in its existing worktree with a fresh tmux session.
@@ -299,18 +325,52 @@ class AgentPool:
         """Capture pane output and worktree diff; return a SubtaskResult."""
         slot = self._get_slot(agent_id)
         started_at = slot.started_at or datetime.now(UTC)
-
-        output = await self._tmux.capture_pane(slot.tmux_session) or ""
-        diff = await self._worktrees.get_diff(slot.name)
-        duration = (datetime.now(UTC) - started_at).total_seconds()
-
-        return SubtaskResult(
-            subtask_id=slot.task_id or agent_id,
-            success=bool(output),
-            output=output,
-            diff=diff,
-            duration_seconds=duration,
+        result_span = self._trace_span(
+            "agent.collect_result",
+            agent_id=slot.id,
+            agent_name=slot.name,
+            runtime=slot.runtime,
+            model=slot.model,
+            task_id=slot.task_id,
         )
+
+        try:
+            output = await self._tmux.capture_pane(slot.tmux_session) or ""
+            diff = await self._worktrees.get_diff(slot.name)
+            duration = (datetime.now(UTC) - started_at).total_seconds()
+            result = SubtaskResult(
+                subtask_id=slot.task_id or agent_id,
+                success=bool(output),
+                output=output,
+                diff=diff,
+                duration_seconds=duration,
+            )
+            if self._tracer and result_span:
+                self._tracer.end_span(
+                    result_span,
+                    {
+                        "success": result.success,
+                        "has_diff": bool(result.diff),
+                        "has_output": bool(result.output),
+                    },
+                    metadata={
+                        "duration_seconds": result.duration_seconds,
+                        "output_chars": len(result.output),
+                        "diff_chars": len(result.diff),
+                        "subtask_id": result.subtask_id,
+                    },
+                    level="WARNING" if not result.output and not result.diff else None,
+                )
+            return result
+        except Exception as exc:
+            if self._tracer and result_span:
+                self._tracer.end_span(
+                    result_span,
+                    {"error": str(exc)},
+                    level="ERROR",
+                    status_message=str(exc),
+                )
+            raise
 
     async def release(self, agent_id: str) -> None:
         """Kill the tmux session, remove the worktree, and mark the slot dead."""
