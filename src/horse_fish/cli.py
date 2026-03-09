@@ -188,5 +188,95 @@ def logs(agent, lines):
             click.echo()
 
 
+@main.command()
+@click.option("--runtime", default="pi", help="Runtime for smoke test agent")
+@click.option("--model", default=None, help="Model override")
+def smoke(runtime: str, model: str | None):
+    """Run end-to-end smoke test with a real agent."""
+    from horse_fish.smoke import (
+        TASK_DESCRIPTION,
+        cleanup,
+        seed,
+        verify_cognee,
+        verify_lessons,
+        verify_merge_commit,
+        verify_test_passes,
+    )
+
+    repo_root = Path.cwd()
+    results: list[tuple[str, bool, str]] = []
+
+    # Phase 1: Seed
+    click.echo("=== Phase 1: Seeding broken test ===")
+    seed_sha = seed(repo_root)
+    click.echo(f"Seeded at commit {seed_sha[:8]}")
+
+    try:
+        # Phase 2: Run pipeline
+        click.echo("=== Phase 2: Running pipeline ===")
+        orchestrator, store, pool = _init_components(runtime, model, max_agents=1)
+        try:
+            run_result = asyncio.run(orchestrator.run(TASK_DESCRIPTION))
+            click.echo(f"Run {run_result.id}: {run_result.state}")
+            for subtask in run_result.subtasks:
+                click.echo(f"  [{subtask.state}] {subtask.description}")
+        except Exception as exc:
+            click.echo(f"Pipeline failed: {exc}")
+            run_result = None
+        finally:
+            # Clean up agents regardless
+            asyncio.run(pool.cleanup())
+            store.close()
+
+        # Phase 3: Verify
+        click.echo("\n=== Phase 3: Verification ===")
+
+        # Check 1: Pipeline completed
+        if run_result and run_result.state.value == "completed":
+            results.append(("pipeline_completed", True, "completed"))
+        else:
+            state = run_result.state.value if run_result else "no result"
+            results.append(("pipeline_completed", False, state))
+
+        # Check 2: Test passes on main
+        passed, output = verify_test_passes(repo_root)
+        results.append(("test_passes", passed, output.splitlines()[-1] if output.strip() else "no output"))
+
+        # Check 3: Merge commit exists
+        passed, log = verify_merge_commit(repo_root, seed_sha)
+        results.append(("merge_commit", passed, log.splitlines()[0] if log.strip() else "no commits"))
+
+        # Check 4: Cognee learned
+        cognee_mem = CogneeMemory() if CogneeMemory else None
+        passed, detail = asyncio.run(verify_cognee(cognee_mem))
+        results.append(("cognee_learned", passed, detail))
+
+        # Check 5: Lessons extracted
+        if run_result:
+            passed, detail = verify_lessons(run_result)
+            results.append(("lessons_extracted", passed, detail))
+        else:
+            results.append(("lessons_extracted", False, "no run result"))
+
+        # Phase 4: Report
+        click.echo("\n=== Phase 4: Results ===")
+        all_passed = True
+        for name, passed, detail in results:
+            status = "PASS" if passed else "FAIL"
+            if not passed and "skipped" in detail:
+                status = "SKIP"
+            else:
+                all_passed = all_passed and passed
+            click.echo(f"  [{status}] {name}: {detail}")
+
+        click.echo(f"\n{'ALL CHECKS PASSED' if all_passed else 'SOME CHECKS FAILED'}")
+
+    finally:
+        # Phase 5: Cleanup
+        click.echo("\n=== Phase 5: Cleanup ===")
+        cleanup(repo_root, seed_sha)
+        click.echo("Cleaned up seed files")
+
+
 if __name__ == "__main__":
     main()
