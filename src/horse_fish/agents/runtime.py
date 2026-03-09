@@ -173,9 +173,8 @@ class DroidRuntime:
         return env
 
     def post_ready_commands(self, model: str) -> list[str]:
-        """Send /model command to select the configured model after droid starts."""
-        if model:
-            return [f"/model {model}"]
+        # Model selection is configured via ~/.factory/settings.json defaultModel.
+        # The /model command opens an interactive picker that can't be scripted.
         return []
 
 

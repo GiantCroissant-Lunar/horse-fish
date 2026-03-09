@@ -198,15 +198,11 @@ class TestDroidRuntime:
         assert pattern.search('> Try "Optimize the performance"')
         assert pattern.search("? for help")
 
-    def test_droid_post_ready_commands_with_model(self) -> None:
+    def test_droid_post_ready_commands_returns_empty(self) -> None:
+        # Model selection is via ~/.factory/settings.json, not /model command
         runtime = DroidRuntime()
-        cmds = runtime.post_ready_commands("glm-4.7")
-        assert cmds == ["/model glm-4.7"]
-
-    def test_droid_post_ready_commands_no_model(self) -> None:
-        runtime = DroidRuntime()
-        cmds = runtime.post_ready_commands("")
-        assert cmds == []
+        assert runtime.post_ready_commands("glm-4.7") == []
+        assert runtime.post_ready_commands("") == []
 
     def test_droid_in_runtime_registry(self) -> None:
         assert "droid" in RUNTIME_REGISTRY
