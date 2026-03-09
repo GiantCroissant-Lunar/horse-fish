@@ -55,6 +55,7 @@ src/horse_fish/
 | Copilot | `copilot` | gpt-5.4 | Fast, good code generation |
 | Pi | `pi` | kimi-for-coding | Free tier, good for bulk work |
 | OpenCode | `opencode` | qwen3.5-plus | Free tier (Alibaba), fast |
+| Kimi | `kimi` | kimi-for-coding | Free tier (Moonshot), strong coding |
 
 ## Commands
 
