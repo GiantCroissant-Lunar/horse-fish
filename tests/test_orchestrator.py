@@ -1151,6 +1151,184 @@ async def test_run_scores_trace_outcomes(mock_pool, mock_planner, mock_gates):
     assert "run_success" in score_names
     assert "completed_subtasks" in score_names
     assert "review_gate_pass_rate" in score_names
+    assert "execution_retry_count" in score_names
+    assert "gate_retry_count" in score_names
+    assert "merge_conflict_count" in score_names
+
+
+def test_score_run_outcomes_includes_retry_and_merge_metrics(mock_pool, mock_planner, mock_gates):
+    """_score_run_outcomes should emit retry and merge-conflict scores."""
+    mock_tracer = MagicMock()
+    orchestrator = Orchestrator(
+        pool=mock_pool,
+        planner=mock_planner,
+        gates=mock_gates,
+        runtime="claude",
+        tracer=mock_tracer,
+    )
+    run = Run.create("Build system")
+    run.state = RunState.failed
+    run.subtasks = [
+        Subtask(id="subtask-1", description="Task 1", state=SubtaskState.done),
+        Subtask(id="subtask-2", description="Task 2", state=SubtaskState.failed),
+    ]
+    trace = MagicMock()
+
+    orchestrator._execution_retry_events = 2
+    orchestrator._execution_retry_exhausted = 1
+    orchestrator._gate_retry_events = 1
+    orchestrator._gate_retry_exhausted = 0
+    orchestrator._merge_conflicts = [
+        {"subtask_id": "subtask-2", "branch": "horse-fish/hf-subtask-2", "conflict_files": []}
+    ]
+
+    orchestrator._score_run_outcomes(run, trace)
+
+    score_calls = {call.args[1]: call for call in mock_tracer.score_trace.call_args_list}
+    assert score_calls["execution_retry_count"].args[2] == 2.0
+    assert score_calls["execution_retry_count"].kwargs["metadata"] == {"retry_exhausted_count": 1}
+    assert score_calls["gate_retry_count"].args[2] == 1.0
+    assert score_calls["retry_exhausted_count"].args[2] == 1.0
+    assert score_calls["merge_conflict_count"].args[2] == 1.0
+    assert score_calls["merge_conflict"].args[2] == "conflict"
+
+
+@pytest.mark.asyncio
+async def test_run_scores_execution_retries_after_stall(mock_pool, mock_planner, mock_gates):
+    """run() should score execution retries when stalled subtasks are redispatched."""
+    mock_planner.decompose.return_value = [Subtask(id="subtask-1", description="Task 1")]
+
+    first_slot = AgentSlot(
+        id="agent-1",
+        name="hf-subtask-1-a",
+        runtime="claude",
+        model="claude-sonnet-4.6",
+        capability="builder",
+        state=AgentState.busy,
+        worktree_path="/tmp/worktree-a",
+    )
+    retry_slot = AgentSlot(
+        id="agent-2",
+        name="hf-subtask-1-b",
+        runtime="claude",
+        model="claude-sonnet-4.6",
+        capability="builder",
+        state=AgentState.busy,
+        worktree_path="/tmp/worktree-b",
+    )
+    mock_pool.spawn.side_effect = [first_slot, retry_slot]
+    mock_pool.send_task = AsyncMock()
+    mock_pool.release = AsyncMock()
+
+    def check_status_by_agent(agent_id):
+        return AgentState.busy if agent_id == "agent-1" else AgentState.dead
+
+    def collect_result_by_agent(agent_id):
+        if agent_id == "agent-1":
+            return SubtaskResult(subtask_id="subtask-1", success=False, output="", diff="", duration_seconds=0.0)
+        return SubtaskResult(subtask_id="subtask-1", success=True, output="Done", diff="commit", duration_seconds=5.0)
+
+    mock_pool.check_status = AsyncMock(side_effect=check_status_by_agent)
+    mock_pool.collect_result = AsyncMock(side_effect=collect_result_by_agent)
+    mock_pool._get_slot.return_value = retry_slot
+    mock_pool._worktrees.merge = AsyncMock(return_value=True)
+    mock_gates.run_all = AsyncMock(
+        return_value=[GateResult(gate="compile", passed=True, output="ok", duration_seconds=1.0)]
+    )
+
+    mock_tracer = MagicMock()
+    mock_trace = MagicMock()
+    mock_trace.run_id = "run-1"
+    mock_trace.trace_id = "trace-1"
+    mock_trace.spans = []
+    mock_tracer.trace_run.return_value = mock_trace
+    mock_tracer.span.return_value = MagicMock()
+
+    orchestrator = Orchestrator(
+        pool=mock_pool,
+        planner=mock_planner,
+        gates=mock_gates,
+        runtime="claude",
+        tracer=mock_tracer,
+        stall_timeout_seconds=0,
+    )
+
+    async def mock_sleep(seconds):
+        return None
+
+    with pytest.MonkeyPatch().context() as m:
+        m.setattr("horse_fish.orchestrator.engine.asyncio.sleep", mock_sleep)
+        run = await orchestrator.run("Build system")
+
+    assert run.state == RunState.completed
+    score_calls = {call.args[1]: call for call in mock_tracer.score_trace.call_args_list}
+    assert score_calls["execution_retry_count"].args[2] == 1.0
+    assert score_calls["execution_retry_count"].kwargs["metadata"] == {"retry_exhausted_count": 0}
+
+
+@pytest.mark.asyncio
+async def test_run_scores_merge_conflicts(mock_pool, mock_planner, mock_gates):
+    """run() should score merge conflicts when merge fails."""
+    mock_planner.decompose.return_value = [Subtask(id="subtask-1", description="Task 1")]
+
+    slot = AgentSlot(
+        id="agent-1",
+        name="hf-subtask-1",
+        runtime="claude",
+        model="claude-sonnet-4.6",
+        capability="builder",
+        state=AgentState.busy,
+        worktree_path="/tmp/worktree",
+        branch="horse-fish/hf-subtask-1",
+    )
+    mock_pool.spawn.return_value = slot
+    mock_pool.send_task = AsyncMock()
+    mock_pool.check_status = AsyncMock(return_value=AgentState.dead)
+    mock_pool.collect_result = AsyncMock(
+        return_value=SubtaskResult(
+            subtask_id="subtask-1",
+            success=True,
+            output="Done",
+            diff="commit",
+            duration_seconds=10.0,
+        )
+    )
+    mock_pool._get_slot.return_value = slot
+    mock_gates.run_all = AsyncMock(
+        return_value=[GateResult(gate="compile", passed=True, output="ok", duration_seconds=1.0)]
+    )
+    mock_pool._worktrees.merge = AsyncMock(return_value=False)
+
+    mock_tracer = MagicMock()
+    mock_trace = MagicMock()
+    mock_trace.run_id = "run-1"
+    mock_trace.trace_id = "trace-1"
+    mock_trace.spans = []
+    mock_tracer.trace_run.return_value = mock_trace
+    mock_tracer.span.return_value = MagicMock()
+
+    orchestrator = Orchestrator(
+        pool=mock_pool,
+        planner=mock_planner,
+        gates=mock_gates,
+        runtime="claude",
+        tracer=mock_tracer,
+    )
+
+    async def mock_sleep(seconds):
+        return None
+
+    with pytest.MonkeyPatch().context() as m:
+        m.setattr("horse_fish.orchestrator.engine.asyncio.sleep", mock_sleep)
+        run = await orchestrator.run("Build system")
+
+    assert run.state == RunState.failed
+    score_calls = {call.args[1]: call for call in mock_tracer.score_trace.call_args_list}
+    assert score_calls["merge_conflict_count"].args[2] == 1.0
+    assert score_calls["merge_conflict_count"].kwargs["metadata"] == {
+        "conflicts": [{"subtask_id": "subtask-1", "branch": "horse-fish/hf-subtask-1", "conflict_files": []}]
+    }
+    assert score_calls["merge_conflict"].args[2] == "conflict"
 
 
 @pytest.mark.asyncio

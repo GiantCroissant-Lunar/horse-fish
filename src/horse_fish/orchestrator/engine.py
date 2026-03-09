@@ -77,6 +77,11 @@ class Orchestrator:
         self._concurrency_limits = concurrency_limits or {}
         self._store = store
         self._active_trace = None
+        self._execution_retry_events = 0
+        self._execution_retry_exhausted = 0
+        self._gate_retry_events = 0
+        self._gate_retry_exhausted = 0
+        self._merge_conflicts: list[dict[str, object]] = []
         self._handlers: dict[RunState, _Handler] = {
             RunState.planning: self._plan,
             RunState.executing: self._execute,
@@ -102,6 +107,93 @@ class Orchestrator:
         }
         base_metadata.update(metadata)
         return self._tracer.span(self._active_trace, name, base_metadata)
+
+    def _reset_trace_metrics(self) -> None:
+        """Reset per-run observability counters before a new run starts."""
+        self._execution_retry_events = 0
+        self._execution_retry_exhausted = 0
+        self._gate_retry_events = 0
+        self._gate_retry_exhausted = 0
+        self._merge_conflicts = []
+
+    def _record_merge_conflict(
+        self,
+        subtask_id: str,
+        *,
+        branch: str | None = None,
+        conflict_files: list[str] | None = None,
+    ) -> None:
+        """Store merge conflict details for later Langfuse scoring."""
+        self._merge_conflicts.append(
+            {
+                "subtask_id": subtask_id,
+                "branch": branch,
+                "conflict_files": conflict_files or [],
+            }
+        )
+
+    def _score_run_outcomes(self, run: Run, trace) -> None:
+        """Emit run-level Langfuse scores after the state machine finishes."""
+        if not self._tracer or not trace:
+            return
+
+        self._tracer.score_trace(
+            trace,
+            "run_success",
+            1.0 if run.state == RunState.completed else 0.0,
+            data_type="NUMERIC",
+            metadata={"status": run.state.value},
+        )
+        self._tracer.score_trace(
+            trace,
+            "completed_subtasks",
+            float(sum(1 for s in run.subtasks if s.state == SubtaskState.done)),
+            data_type="NUMERIC",
+        )
+        self._tracer.score_trace(
+            trace,
+            "failed_subtasks",
+            float(sum(1 for s in run.subtasks if s.state == SubtaskState.failed)),
+            data_type="NUMERIC",
+        )
+        self._tracer.score_trace(
+            trace,
+            "execution_retry_count",
+            float(self._execution_retry_events),
+            data_type="NUMERIC",
+            metadata={"retry_exhausted_count": self._execution_retry_exhausted},
+        )
+        self._tracer.score_trace(
+            trace,
+            "gate_retry_count",
+            float(self._gate_retry_events),
+            data_type="NUMERIC",
+            metadata={"retry_exhausted_count": self._gate_retry_exhausted},
+        )
+        self._tracer.score_trace(
+            trace,
+            "retry_exhausted_count",
+            float(self._execution_retry_exhausted + self._gate_retry_exhausted),
+            data_type="NUMERIC",
+            metadata={
+                "execution_retry_exhausted_count": self._execution_retry_exhausted,
+                "gate_retry_exhausted_count": self._gate_retry_exhausted,
+            },
+        )
+        self._tracer.score_trace(
+            trace,
+            "merge_conflict_count",
+            float(len(self._merge_conflicts)),
+            data_type="NUMERIC",
+            metadata={"conflicts": self._merge_conflicts},
+        )
+        self._tracer.score_trace(
+            trace,
+            "merge_conflict",
+            "conflict" if self._merge_conflicts else "clean",
+            data_type="CATEGORICAL",
+            metadata={"count": len(self._merge_conflicts)},
+        )
 
     def _persist_run(self, run: Run) -> None:
         """Persist run state to SQLite."""
@@ -152,6 +244,7 @@ class Orchestrator:
             else None
         )
         self._active_trace = trace
+        self._reset_trace_metrics()
 
         try:
             while run.state not in (RunState.completed, RunState.failed):
@@ -175,25 +268,7 @@ class Orchestrator:
             self._persist_run(run)
 
             if self._tracer and trace:
-                self._tracer.score_trace(
-                    trace,
-                    "run_success",
-                    1.0 if run.state == RunState.completed else 0.0,
-                    data_type="NUMERIC",
-                    metadata={"status": run.state.value},
-                )
-                self._tracer.score_trace(
-                    trace,
-                    "completed_subtasks",
-                    float(sum(1 for s in run.subtasks if s.state == SubtaskState.done)),
-                    data_type="NUMERIC",
-                )
-                self._tracer.score_trace(
-                    trace,
-                    "failed_subtasks",
-                    float(sum(1 for s in run.subtasks if s.state == SubtaskState.failed)),
-                    data_type="NUMERIC",
-                )
+                self._score_run_outcomes(run, trace)
                 self._tracer.end_trace(
                     trace,
                     run.state.value,
@@ -285,6 +360,7 @@ class Orchestrator:
 
             if subtask.retry_count < subtask.max_retries:
                 subtask.retry_count += 1
+                self._execution_retry_events += 1
                 subtask.state = SubtaskState.pending
                 subtask.agent = None
                 subtask.last_activity_at = None
@@ -294,6 +370,7 @@ class Orchestrator:
                 self._persist_subtask(subtask, run.id)
                 logger.info("Retrying subtask %s (attempt %d/%d)", subtask.id, subtask.retry_count, subtask.max_retries)
             else:
+                self._execution_retry_exhausted += 1
                 subtask.state = SubtaskState.failed
                 if subtask.id in agent_map:
                     del agent_map[subtask.id]
@@ -545,6 +622,7 @@ class Orchestrator:
                     await self._pool.send_task(subtask.agent, gate_output, prompt_kind="fix")
                     subtask.state = SubtaskState.running
                     subtask.gate_retry_count += 1
+                    self._gate_retry_events += 1
                     subtask.last_activity_at = datetime.now(UTC)
                     self._persist_subtask(subtask, run.id)
                     needs_re_execute = True
@@ -565,6 +643,7 @@ class Orchestrator:
                     continue
 
                 # No retries left
+                self._gate_retry_exhausted += 1
                 subtask.state = SubtaskState.failed
                 self._persist_subtask(subtask, run.id)
                 all_passed = False
@@ -641,6 +720,11 @@ class Orchestrator:
             for result in results:
                 if not result.success:
                     logger.error("Merge conflict for subtask %s", result.subtask_id)
+                    self._record_merge_conflict(
+                        result.subtask_id,
+                        branch=result.branch,
+                        conflict_files=result.conflict_files,
+                    )
                     run.state = RunState.failed
                     return run
         else:
@@ -656,6 +740,7 @@ class Orchestrator:
                     success = await self._pool._worktrees.merge(slot.name)
                     if not success:
                         logger.error("Merge conflict for subtask %s", subtask.id)
+                        self._record_merge_conflict(subtask.id, branch=slot.branch)
                         subtask.state = SubtaskState.failed
                         run.state = RunState.failed
                         if merge_span:

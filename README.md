@@ -113,12 +113,12 @@ Current tracing covers:
 - Generation observations for agent task prompts, fix prompts, and raw prompt sends
 - Langfuse-managed text prompts with local fallbacks for planner classify/decompose prompts
 - Langfuse-managed text prompts with local fallbacks for agent task/fix prompts
-- Trace scores for run success, completed/failed subtasks, and review gate pass rate
+- Trace scores for run success, completed/failed subtasks, review gate pass rate, retries, and merge conflicts
 - Run-level metadata such as runtime, model, max agents, subtask counts, and final status
 
 Recommended next Langfuse improvements:
 
-- Add more scores around retries, merge conflicts, and planner quality
+- Add planner-quality scores and evaluator feedback loops
 - Add finer-grained spans around retries, stall recovery, and agent readiness
 
 ## Project Structure
