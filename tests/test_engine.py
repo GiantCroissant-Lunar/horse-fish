@@ -25,6 +25,8 @@ def mock_pool():
             "tool_count": 0,
             "prompt_count": 0,
             "subtasks_with_runtime_observations": 0,
+            "subtask_ids": [],
+            "subtask_breakdown": [],
             "runtimes": {},
             "observation_names": {},
         }

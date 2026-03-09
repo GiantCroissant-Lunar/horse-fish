@@ -24,6 +24,8 @@ def mock_pool():
             "tool_count": 0,
             "prompt_count": 0,
             "subtasks_with_runtime_observations": 0,
+            "subtask_ids": [],
+            "subtask_breakdown": [],
             "runtimes": {},
             "observation_names": {},
         }
@@ -1230,6 +1232,7 @@ async def test_run_scores_trace_outcomes(mock_pool, mock_planner, mock_gates):
     assert "runtime_observation_count" in score_names
     assert "runtime_tool_observation_count" in score_names
     assert "runtime_prompt_observation_count" in score_names
+    assert "runtime_observation_subtask_coverage" in score_names
 
 
 def test_score_run_outcomes_includes_retry_and_merge_metrics(mock_pool, mock_planner, mock_gates):
@@ -1262,6 +1265,18 @@ def test_score_run_outcomes_includes_retry_and_merge_metrics(mock_pool, mock_pla
         "tool_count": 2,
         "prompt_count": 1,
         "subtasks_with_runtime_observations": 1,
+        "subtask_ids": ["subtask-1"],
+        "subtask_breakdown": [
+            {
+                "subtask_id": "subtask-1",
+                "count": 3,
+                "tool_count": 2,
+                "prompt_count": 1,
+                "subtask_description": "Task 1",
+                "prompt_kinds": {"task": 3},
+                "observation_names": {"Bash": 2, "permission_prompt": 1},
+            }
+        ],
         "runtimes": {"claude": 3},
         "observation_names": {"Bash": 2, "permission_prompt": 1},
     }
@@ -1280,11 +1295,29 @@ def test_score_run_outcomes_includes_retry_and_merge_metrics(mock_pool, mock_pla
         "tool_count": 2,
         "prompt_count": 1,
         "subtasks_with_runtime_observations": 1,
+        "subtask_ids": ["subtask-1"],
+        "subtask_breakdown": [
+            {
+                "subtask_id": "subtask-1",
+                "count": 3,
+                "tool_count": 2,
+                "prompt_count": 1,
+                "subtask_description": "Task 1",
+                "prompt_kinds": {"task": 3},
+                "observation_names": {"Bash": 2, "permission_prompt": 1},
+            }
+        ],
         "runtimes": {"claude": 3},
         "observation_names": {"Bash": 2, "permission_prompt": 1},
     }
     assert score_calls["runtime_tool_observation_count"].args[2] == 2.0
     assert score_calls["runtime_prompt_observation_count"].args[2] == 1.0
+    assert score_calls["runtime_observation_subtask_coverage"].args[2] == 0.5
+    assert score_calls["runtime_observation_subtask_coverage"].kwargs["metadata"] == {
+        "subtasks_with_runtime_observations": 1,
+        "total_subtasks": 2,
+        "subtask_ids": ["subtask-1"],
+    }
 
 
 @pytest.mark.asyncio

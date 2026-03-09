@@ -92,6 +92,7 @@ class AgentPool:
                 "tool_count": 0,
                 "prompt_count": 0,
                 "subtasks": set(),
+                "subtask_breakdown": {},
                 "runtimes": {},
                 "observation_names": {},
             },
@@ -105,6 +106,28 @@ class AgentPool:
         subtask_id = task_context.get("subtask_id")
         if subtask_id:
             stats["subtasks"].add(subtask_id)
+            breakdown = stats["subtask_breakdown"].setdefault(
+                subtask_id,
+                {
+                    "count": 0,
+                    "tool_count": 0,
+                    "prompt_count": 0,
+                    "subtask_description": task_context.get("subtask_description"),
+                    "prompt_kinds": {},
+                    "observation_names": {},
+                },
+            )
+            breakdown["count"] += 1
+            if observation.kind == "tool":
+                breakdown["tool_count"] += 1
+            elif observation.kind == "prompt":
+                breakdown["prompt_count"] += 1
+            prompt_kind = task_context.get("prompt_kind")
+            if prompt_kind:
+                breakdown["prompt_kinds"][prompt_kind] = breakdown["prompt_kinds"].get(prompt_kind, 0) + 1
+            breakdown["observation_names"][observation.name] = (
+                breakdown["observation_names"].get(observation.name, 0) + 1
+            )
 
         stats["runtimes"][slot.runtime] = stats["runtimes"].get(slot.runtime, 0) + 1
         stats["observation_names"][observation.name] = stats["observation_names"].get(observation.name, 0) + 1
@@ -118,15 +141,22 @@ class AgentPool:
                 "tool_count": 0,
                 "prompt_count": 0,
                 "subtasks_with_runtime_observations": 0,
+                "subtask_ids": [],
+                "subtask_breakdown": [],
                 "runtimes": {},
                 "observation_names": {},
             }
 
+        subtask_breakdown = [
+            {"subtask_id": subtask_id, **details} for subtask_id, details in sorted(stats["subtask_breakdown"].items())
+        ]
         return {
             "total_count": stats["total_count"],
             "tool_count": stats["tool_count"],
             "prompt_count": stats["prompt_count"],
             "subtasks_with_runtime_observations": len(stats["subtasks"]),
+            "subtask_ids": sorted(stats["subtasks"]),
+            "subtask_breakdown": subtask_breakdown,
             "runtimes": dict(stats["runtimes"]),
             "observation_names": dict(stats["observation_names"]),
         }

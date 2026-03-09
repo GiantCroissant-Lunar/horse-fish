@@ -137,6 +137,9 @@ class Orchestrator:
         if not self._tracer or not trace:
             return
         runtime_summary = self._pool.runtime_observation_summary(run.id)
+        subtask_coverage = (
+            runtime_summary["subtasks_with_runtime_observations"] / len(run.subtasks) if run.subtasks else 0.0
+        )
 
         self._tracer.score_trace(
             trace,
@@ -204,6 +207,8 @@ class Orchestrator:
                 "tool_count": runtime_summary["tool_count"],
                 "prompt_count": runtime_summary["prompt_count"],
                 "subtasks_with_runtime_observations": runtime_summary["subtasks_with_runtime_observations"],
+                "subtask_ids": runtime_summary["subtask_ids"],
+                "subtask_breakdown": runtime_summary["subtask_breakdown"],
                 "runtimes": runtime_summary["runtimes"],
                 "observation_names": runtime_summary["observation_names"],
             },
@@ -219,6 +224,17 @@ class Orchestrator:
             "runtime_prompt_observation_count",
             float(runtime_summary["prompt_count"]),
             data_type="NUMERIC",
+        )
+        self._tracer.score_trace(
+            trace,
+            "runtime_observation_subtask_coverage",
+            subtask_coverage,
+            data_type="NUMERIC",
+            metadata={
+                "subtasks_with_runtime_observations": runtime_summary["subtasks_with_runtime_observations"],
+                "total_subtasks": len(run.subtasks),
+                "subtask_ids": runtime_summary["subtask_ids"],
+            },
         )
 
     def _persist_run(self, run: Run) -> None:

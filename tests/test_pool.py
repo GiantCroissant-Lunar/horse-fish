@@ -620,6 +620,18 @@ async def test_runtime_observation_summary_counts_deduped_events() -> None:
     assert summary["tool_count"] == 1
     assert summary["prompt_count"] == 1
     assert summary["subtasks_with_runtime_observations"] == 1
+    assert summary["subtask_ids"] == ["subtask-1"]
+    assert summary["subtask_breakdown"] == [
+        {
+            "subtask_id": "subtask-1",
+            "count": 2,
+            "tool_count": 1,
+            "prompt_count": 1,
+            "subtask_description": "Implement feature X",
+            "prompt_kinds": {"task": 2},
+            "observation_names": {"Bash": 1, "permission_prompt": 1},
+        }
+    ]
     assert summary["runtimes"] == {"claude": 2}
     assert summary["observation_names"]["Bash"] == 1
     assert summary["observation_names"]["permission_prompt"] == 1
