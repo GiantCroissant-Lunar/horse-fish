@@ -113,6 +113,7 @@ Current tracing covers:
 - Agent execution probe spans for status checks and result collection
 - Runtime-derived observations for tool calls and interactive prompts seen in pane output, tagged with run/subtask context when dispatched by the orchestrator
 - Trace scores for runtime-derived observation counts (total, tool, prompt) with per-runtime, per-observation-name, per-subtask, excerpt, and recency metadata
+- Final trace output includes a compact runtime observation summary for quick inspection at the root trace level
 - Generation observations for `smart_planner.classify` and `planner.decompose`
 - Generation observations for agent task prompts, fix prompts, and raw prompt sends
 - Langfuse-managed text prompts with local fallbacks for planner classify/decompose prompts

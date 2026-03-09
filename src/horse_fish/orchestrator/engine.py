@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 from datetime import UTC, datetime
+from typing import Any
 
 from horse_fish.agents.pool import AgentPool
 from horse_fish.dispatch.selector import AgentSelector
@@ -241,6 +242,25 @@ class Orchestrator:
             },
         )
 
+    def _trace_output(self, run: Run) -> dict[str, Any]:
+        """Build the final trace output payload."""
+        runtime_summary = self._pool.runtime_observation_summary(run.id)
+        return {
+            "status": run.state.value,
+            "subtask_count": len(run.subtasks),
+            "completed_subtasks": sum(1 for s in run.subtasks if s.state == SubtaskState.done),
+            "failed_subtasks": sum(1 for s in run.subtasks if s.state == SubtaskState.failed),
+            "runtime_observations": {
+                "total_count": runtime_summary["total_count"],
+                "tool_count": runtime_summary["tool_count"],
+                "prompt_count": runtime_summary["prompt_count"],
+                "first_observed_at": runtime_summary["first_observed_at"],
+                "last_observed_at": runtime_summary["last_observed_at"],
+                "subtask_ids": runtime_summary["subtask_ids"],
+                "recent_observations": runtime_summary["recent_observations"],
+            },
+        }
+
     def _persist_run(self, run: Run) -> None:
         """Persist run state to SQLite."""
         if not self._store:
@@ -318,12 +338,7 @@ class Orchestrator:
                 self._tracer.end_trace(
                     trace,
                     run.state.value,
-                    output={
-                        "status": run.state.value,
-                        "subtask_count": len(run.subtasks),
-                        "completed_subtasks": sum(1 for s in run.subtasks if s.state == SubtaskState.done),
-                        "failed_subtasks": sum(1 for s in run.subtasks if s.state == SubtaskState.failed),
-                    },
+                    output=self._trace_output(run),
                 )
             self._active_trace = None
         if run.state == RunState.completed:

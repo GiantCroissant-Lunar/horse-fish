@@ -1236,6 +1236,22 @@ async def test_run_scores_trace_outcomes(mock_pool, mock_planner, mock_gates):
     assert "runtime_tool_observation_count" in score_names
     assert "runtime_prompt_observation_count" in score_names
     assert "runtime_observation_subtask_coverage" in score_names
+    mock_tracer.end_trace.assert_called_once()
+    assert mock_tracer.end_trace.call_args.kwargs["output"] == {
+        "status": "completed",
+        "subtask_count": 1,
+        "completed_subtasks": 1,
+        "failed_subtasks": 0,
+        "runtime_observations": {
+            "total_count": 0,
+            "tool_count": 0,
+            "prompt_count": 0,
+            "first_observed_at": None,
+            "last_observed_at": None,
+            "subtask_ids": [],
+            "recent_observations": [],
+        },
+    }
 
 
 def test_score_run_outcomes_includes_retry_and_merge_metrics(mock_pool, mock_planner, mock_gates):
@@ -1363,6 +1379,69 @@ def test_score_run_outcomes_includes_retry_and_merge_metrics(mock_pool, mock_pla
         "total_subtasks": 2,
         "subtask_ids": ["subtask-1"],
         "last_observed_at": "2026-03-09T12:02:00+00:00",
+    }
+
+
+def test_trace_output_includes_runtime_observation_summary(mock_pool, mock_planner, mock_gates):
+    """_trace_output should include a compact runtime observation summary."""
+    orchestrator = Orchestrator(
+        pool=mock_pool,
+        planner=mock_planner,
+        gates=mock_gates,
+        runtime="claude",
+    )
+    run = Run.create("Build system")
+    run.state = RunState.completed
+    run.subtasks = [
+        Subtask(id="subtask-1", description="Task 1", state=SubtaskState.done),
+        Subtask(id="subtask-2", description="Task 2", state=SubtaskState.failed),
+    ]
+    mock_pool.runtime_observation_summary.return_value = {
+        "total_count": 3,
+        "tool_count": 2,
+        "prompt_count": 1,
+        "first_observed_at": "2026-03-09T12:00:00+00:00",
+        "last_observed_at": "2026-03-09T12:02:00+00:00",
+        "subtasks_with_runtime_observations": 1,
+        "subtask_ids": ["subtask-1"],
+        "subtask_breakdown": [],
+        "runtimes": {"claude": 3},
+        "observation_names": {"Bash": 2, "permission_prompt": 1},
+        "recent_observations": [
+            {
+                "subtask_id": "subtask-1",
+                "observation_name": "permission_prompt",
+                "kind": "prompt",
+                "excerpt": "Confirm to bypass permissions?",
+                "observed_at": "2026-03-09T12:02:00+00:00",
+            }
+        ],
+    }
+
+    output = orchestrator._trace_output(run)
+
+    assert output == {
+        "status": "completed",
+        "subtask_count": 2,
+        "completed_subtasks": 1,
+        "failed_subtasks": 1,
+        "runtime_observations": {
+            "total_count": 3,
+            "tool_count": 2,
+            "prompt_count": 1,
+            "first_observed_at": "2026-03-09T12:00:00+00:00",
+            "last_observed_at": "2026-03-09T12:02:00+00:00",
+            "subtask_ids": ["subtask-1"],
+            "recent_observations": [
+                {
+                    "subtask_id": "subtask-1",
+                    "observation_name": "permission_prompt",
+                    "kind": "prompt",
+                    "excerpt": "Confirm to bypass permissions?",
+                    "observed_at": "2026-03-09T12:02:00+00:00",
+                }
+            ],
+        },
     }
 
 
