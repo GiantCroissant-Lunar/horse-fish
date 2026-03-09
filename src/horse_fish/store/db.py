@@ -238,6 +238,40 @@ class Store:
             "runtimes": runtimes,
         }
 
+    def insert_queued_run(self, run_id: str, task: str) -> None:
+        """Insert a new run in 'queued' state."""
+        from datetime import UTC, datetime
+
+        now = datetime.now(UTC).isoformat()
+        self.execute(
+            "INSERT INTO runs (id, task, state, created_at) VALUES (?, ?, 'queued', ?)",
+            (run_id, task, now),
+        )
+
+    def fetch_queued_runs(self, limit: int = 10) -> list[dict]:
+        """Fetch runs in 'queued' state, oldest first."""
+        return self.fetchall(
+            "SELECT * FROM runs WHERE state = 'queued' ORDER BY created_at ASC LIMIT ?",
+            (limit,),
+        )
+
+    def fetch_active_runs(self) -> list[dict]:
+        """Fetch runs in active states (planning, executing, reviewing, merging)."""
+        return self.fetchall(
+            "SELECT * FROM runs WHERE state IN ('planning', 'executing', 'reviewing', 'merging') "
+            "ORDER BY created_at ASC",
+        )
+
+    def update_run_state(self, run_id: str, state: str, completed_at: str | None = None) -> None:
+        """Update a run's state, optionally setting completed_at."""
+        if completed_at:
+            self.execute(
+                "UPDATE runs SET state = ?, completed_at = ? WHERE id = ?",
+                (state, completed_at, run_id),
+            )
+        else:
+            self.execute("UPDATE runs SET state = ? WHERE id = ?", (state, run_id))
+
     def close(self) -> None:
         self._conn.close()
 

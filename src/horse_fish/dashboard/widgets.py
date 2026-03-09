@@ -20,10 +20,14 @@ class PipelineBar(Static):
             else:
                 parts.append(phase)
         pipeline = " → ".join(parts)
-        if self.run_state == "completed":
+        if self.run_state == "queued":
+            pipeline = "[bold dim]QUEUED[/]"
+        elif self.run_state == "completed":
             pipeline += " → [bold green]COMPLETED[/]"
         elif self.run_state == "failed":
             pipeline += " → [bold red]FAILED[/]"
+        elif self.run_state == "cancelled":
+            pipeline = "[bold red]CANCELLED[/]"
         run_info = f"  Run: {self.run_id[:12]}" if self.run_id else ""
         return pipeline + run_info
 
@@ -46,14 +50,25 @@ class AgentTable(DataTable):
         self.clear()
         for agent in agents:
             state = agent.get("state", "")
-            style = "green" if state == "idle" else "yellow" if state == "busy" else "red"
+            style = self.agent_state_style(state)
             self.add_row(
                 agent.get("name", ""),
                 agent.get("runtime", ""),
-                f"[{style}]{state}[/]",
+                f"[{style}]{state}[/]" if style else state,
                 agent.get("task_id", "") or "-",
                 key=agent.get("id", ""),
             )
+
+    @staticmethod
+    def agent_state_style(state: str) -> str:
+        """Return Textual style for an agent state."""
+        styles = {
+            "idle": "green",
+            "busy": "yellow",
+            "dead": "red",
+            "cancelled": "grey",
+        }
+        return styles.get(state, "")
 
     def on_data_table_cursor_changed(self, event) -> None:
         """Handle cursor change to emit AgentSelected message."""
@@ -81,7 +96,7 @@ class SubtaskTable(DataTable):
         self.clear()
         for st in subtasks:
             state = st.get("state", "")
-            style = {"done": "green", "running": "yellow", "pending": "dim", "failed": "red"}.get(state, "")
+            style = self.state_style(state)
             desc = st.get("description", "")[:40]
             self.add_row(
                 desc,
@@ -98,6 +113,7 @@ class SubtaskTable(DataTable):
             "running": "yellow",
             "pending": "dim",
             "failed": "red",
+            "cancelled": "grey",
         }
         return styles.get(state, "")
 

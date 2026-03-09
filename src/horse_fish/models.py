@@ -24,12 +24,14 @@ class SubtaskState(StrEnum):
 
 
 class RunState(StrEnum):
+    queued = "queued"
     planning = "planning"
     executing = "executing"
     reviewing = "reviewing"
     merging = "merging"
     completed = "completed"
     failed = "failed"
+    cancelled = "cancelled"
 
 
 class TaskComplexity(StrEnum):
