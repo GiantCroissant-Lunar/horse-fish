@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 
 import click
+from dotenv import load_dotenv
 
 from horse_fish.agents.pool import AgentPool
 from horse_fish.agents.tmux import TmuxManager
@@ -23,6 +24,8 @@ try:
     from horse_fish.memory.cognee_store import CogneeMemory
 except ImportError:
     CogneeMemory = None  # type: ignore[assignment,misc]
+
+load_dotenv()
 
 DB_PATH = ".horse-fish/state.db"
 
@@ -102,6 +105,33 @@ def status():
             click.echo(f"{row['name']:<20} {row['runtime']:<10} {row['state']:<8} {row['task_id'] or '-'}")
     finally:
         store.close()
+
+
+_ENV_KEYS = [
+    ("DASHSCOPE_API_KEY", "Pi runtime, Cognee fallback LLM", True),
+    ("ZAI_API_KEY", "Droid runtime (Z.AI/GLM)", False),
+    ("INCEPTION_API_KEY", "Cognee primary LLM (Mercury 2)", False),
+    ("LANGFUSE_PUBLIC_KEY", "Langfuse observability", False),
+    ("LANGFUSE_SECRET_KEY", "Langfuse observability", False),
+]
+
+
+@main.command("env-check")
+def env_check():
+    """Validate required environment keys are set."""
+    all_ok = True
+    for key, purpose, required in _ENV_KEYS:
+        value = os.environ.get(key)
+        if value:
+            masked = value[:4] + "..." if len(value) > 4 else "***"
+            click.echo(f"  ✓ {key}: {masked} ({purpose})")
+        else:
+            marker = "✗ MISSING" if required else "- not set"
+            click.echo(f"  {marker} {key}: ({purpose})")
+            if required:
+                all_ok = False
+    if not all_ok:
+        click.echo("\nSome required keys are missing. Copy .env.example to .env and fill in values.")
 
 
 @main.command()
