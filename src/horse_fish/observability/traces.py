@@ -29,7 +29,7 @@ class Span:
     """Represents a Langfuse observation within a trace."""
 
     name: str
-    trace: RunTrace
+    trace: RunTrace | None
     span_id: str | None = None
     kind: str = "span"
     metadata: dict[str, Any] | None = None
@@ -175,7 +175,7 @@ class Tracer:
 
     def generation(
         self,
-        trace: RunTrace,
+        trace: RunTrace | None,
         name: str,
         *,
         input: Any | None = None,
@@ -187,8 +187,9 @@ class Tracer:
         """Create a generation observation within a trace."""
         generation = Span(name=name, trace=trace, kind="generation", metadata=metadata)
 
-        if self._is_noop() or trace._root_observation is None:
-            trace.spans.append(generation)
+        if self._is_noop():
+            if trace is not None:
+                trace.spans.append(generation)
             return generation
 
         try:
@@ -209,7 +210,8 @@ class Tracer:
         except Exception:
             pass
 
-        trace.spans.append(generation)
+        if trace is not None:
+            trace.spans.append(generation)
         return generation
 
     def end_span(

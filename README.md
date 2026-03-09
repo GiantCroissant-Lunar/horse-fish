@@ -17,6 +17,10 @@ hf run "fix the broken test in tests/test_utils.py" --runtime pi
 
 # Monitor (in another terminal)
 hf dash
+
+# Optional: start Langfuse and verify config
+task langfuse:up
+hf env-check
 ```
 
 ## Architecture
@@ -76,6 +80,42 @@ task smoke             # End-to-end smoke test
 task dash              # Launch dashboard
 task setup             # Install dev + all optional deps
 ```
+
+## Observability
+
+Langfuse is optional but now useful for normal `hf run` executions, not just local experiments.
+
+```bash
+# Install the SDK
+pip install -e ".[observability]"
+
+# Start the local Langfuse stack
+task langfuse:up
+
+# Open Langfuse, create a project, and copy the API keys
+# http://localhost:3000
+
+# Add keys to infra/.env or your shell
+export LANGFUSE_HOST=http://localhost:3000
+export LANGFUSE_PUBLIC_KEY=pk-lf-...
+export LANGFUSE_SECRET_KEY=sk-lf-...
+
+# Confirm the CLI sees the config
+hf env-check
+```
+
+Current tracing covers:
+
+- One root trace per `hf run`
+- State spans for planning, executing, reviewing, and merging
+- Generation observations for `smart_planner.classify` and `planner.decompose`
+- Run-level metadata such as runtime, model, max agents, subtask counts, and final status
+
+Recommended next Langfuse improvements:
+
+- Move planner and agent prompt templates into Langfuse Prompt Management and link prompt versions to traces
+- Emit scores for gate pass rate, retries, merge conflicts, and run success
+- Add finer-grained agent/subtask spans around dispatch, retries, and gate feedback loops
 
 ## Project Structure
 

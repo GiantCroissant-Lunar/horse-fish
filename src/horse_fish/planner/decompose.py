@@ -67,9 +67,45 @@ class Planner:
     async def decompose(self, task: str, context: str = "") -> list[Subtask]:
         """Decompose a task description into a list of Subtask objects."""
         prompt = self._build_prompt(task, context)
-        cmd = self._build_command(prompt)
-        raw = await self._run_cli(cmd)
-        return self._parse_response(raw)
+        generation = (
+            self._tracer.generation(
+                None,
+                "planner.decompose",
+                input={"task": task, "context": context, "prompt": prompt},
+                metadata={
+                    "runtime": self.runtime,
+                    "model": self.model,
+                    "context_provided": bool(context),
+                },
+                model=self.model,
+                model_parameters={"runtime": self.runtime},
+            )
+            if self._tracer
+            else None
+        )
+
+        try:
+            cmd = self._build_command(prompt)
+            raw = await self._run_cli(cmd)
+            subtasks = self._parse_response(raw)
+        except Exception as exc:
+            if self._tracer and generation:
+                self._tracer.end_span(
+                    generation,
+                    {"error": str(exc)},
+                    metadata={"runtime": self.runtime, "model": self.model},
+                    level="ERROR",
+                    status_message=str(exc),
+                )
+            raise
+
+        if self._tracer and generation:
+            self._tracer.end_span(
+                generation,
+                {"raw_output": raw, "subtask_count": len(subtasks)},
+                metadata={"runtime": self.runtime, "model": self.model},
+            )
+        return subtasks
 
     def _build_prompt(self, task: str, context: str) -> str:
         return SYSTEM_PROMPT_TEMPLATE.format(task=task, context=context or "No additional context provided.")

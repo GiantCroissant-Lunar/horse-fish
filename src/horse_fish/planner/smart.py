@@ -108,11 +108,43 @@ class SmartPlanner:
             context=context or "No additional context.",
             lessons=f"Lessons from past runs:\n{lessons}" if lessons else "",
         )
+        tracer = getattr(self._planner, "_tracer", None)
+        generation = (
+            tracer.generation(
+                None,
+                "smart_planner.classify",
+                input={"task": task, "context": context, "lessons": lessons, "prompt": prompt},
+                metadata={
+                    "runtime": self._planner.runtime,
+                    "model": self._planner.model,
+                    "has_lessons": bool(lessons),
+                },
+                model=self._planner.model,
+                model_parameters={"runtime": self._planner.runtime},
+            )
+            if tracer
+            else None
+        )
         try:
             cmd = self._planner._build_command(prompt)
             raw = await self._planner._run_cli(cmd)
-            return self._parse_complexity(raw.strip())
+            complexity = self._parse_complexity(raw.strip())
+            if tracer and generation:
+                tracer.end_span(
+                    generation,
+                    {"raw_output": raw.strip(), "complexity": complexity.value},
+                    metadata={"runtime": self._planner.runtime, "model": self._planner.model},
+                )
+            return complexity
         except Exception as exc:
+            if tracer and generation:
+                tracer.end_span(
+                    generation,
+                    {"error": str(exc)},
+                    metadata={"runtime": self._planner.runtime, "model": self._planner.model},
+                    level="ERROR",
+                    status_message=str(exc),
+                )
             logger.warning("Classification failed, defaulting to SOLO: %s", exc)
             return TaskComplexity.solo
 

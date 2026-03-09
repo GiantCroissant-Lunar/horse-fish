@@ -108,6 +108,39 @@ def test_invalid_runtime_raises():
         Planner(runtime="unknown-runtime")
 
 
+@pytest.mark.asyncio
+async def test_decompose_emits_generation_trace():
+    tracer = MagicMock()
+    generation = MagicMock()
+    tracer.generation.return_value = generation
+    planner = Planner(runtime="claude", tracer=tracer)
+    planner._run_cli = AsyncMock(return_value=json.dumps([{"description": "Task A"}]))
+
+    subtasks = await planner.decompose("Add auth", "Django app")
+
+    assert len(subtasks) == 1
+    tracer.generation.assert_called_once()
+    tracer.end_span.assert_called_once()
+    output = tracer.end_span.call_args.args[1]
+    assert output["subtask_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_decompose_traces_generation_error():
+    tracer = MagicMock()
+    generation = MagicMock()
+    tracer.generation.return_value = generation
+    planner = Planner(runtime="claude", tracer=tracer)
+    planner._run_cli = AsyncMock(side_effect=PlannerError("CLI failed"))
+
+    with pytest.raises(PlannerError, match="CLI failed"):
+        await planner.decompose("Add auth", "Django app")
+
+    tracer.generation.assert_called_once()
+    tracer.end_span.assert_called_once()
+    assert tracer.end_span.call_args.kwargs["level"] == "ERROR"
+
+
 # ---------------------------------------------------------------------------
 # JSON parsing — valid response
 # ---------------------------------------------------------------------------
