@@ -244,3 +244,49 @@ class CogneeMemory:
         Searches only the "run_results" dataset for relevant past work.
         """
         return await self._search_cognee(task_description, top_k=top_k, datasets=["run_results"])
+
+    async def batch_ingest(self, entries: list) -> int:
+        """Batch ingest memory entries into Cognee knowledge graph.
+
+        Args:
+            entries: List of MemoryEntry objects (from horse_fish.memory.store).
+                Each has: id, content, agent, run_id, domain, tags, timestamp
+
+        Returns:
+            Number of successfully ingested entries.
+        """
+        self._ensure_configured()
+
+        if not entries:
+            return 0
+
+        # Group entries by domain
+        by_domain: dict[str, list] = {}
+        for entry in entries:
+            domain = entry.domain
+            if domain not in by_domain:
+                by_domain[domain] = []
+            by_domain[domain].append(entry)
+
+        ingested_count = 0
+
+        for domain, domain_entries in by_domain.items():
+            try:
+                # Add all entries for this domain
+                for entry in domain_entries:
+                    await cognee.add(entry.content, dataset_name=domain, node_set=[domain])
+
+                # Cognify once per domain
+                try:
+                    await cognee.cognify(datasets=[domain], temporal_cognify=True)
+                except Exception as exc:
+                    logger.warning("cognify failed with primary LLM for domain %s: %s — trying fallback", domain, exc)
+                    self._configure(use_fallback=True)
+                    await cognee.cognify(datasets=[domain], temporal_cognify=True)
+
+                ingested_count += len(domain_entries)
+
+            except Exception as exc:
+                logger.warning("Failed to ingest entries for domain %s: %s", domain, exc)
+
+        return ingested_count
