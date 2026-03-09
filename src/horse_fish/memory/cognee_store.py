@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from pathlib import Path
@@ -144,7 +145,8 @@ class CogneeMemory:
 
     def _ensure_configured(self) -> None:
         if not self._configured:
-            self._configure()
+            use_fallback = not self._llm_api_key and bool(self._fallback_llm_api_key)
+            self._configure(use_fallback=use_fallback)
 
     async def ingest(self, content: str, metadata: dict[str, Any] | None = None) -> None:
         """Add content to Cognee and build knowledge graph.
@@ -189,7 +191,9 @@ class CogneeMemory:
             metadata=getattr(result, "metadata", {}),
         )
 
-    async def _search_cognee(self, query: str, top_k: int = 5, **extra_kwargs: Any) -> list[CogneeHit]:
+    async def _search_cognee(
+        self, query: str, top_k: int = 5, timeout: float = 60.0, **extra_kwargs: Any
+    ) -> list[CogneeHit]:
         """Shared search implementation with GRAPH_COMPLETION."""
         self._ensure_configured()
 
@@ -197,7 +201,7 @@ class CogneeMemory:
         if SearchType:
             kwargs["query_type"] = SearchType.GRAPH_COMPLETION
 
-        results = await cognee.search(**kwargs)
+        results = await asyncio.wait_for(cognee.search(**kwargs), timeout=timeout)
         return [self._parse_result(r) for r in results[:top_k]]
 
     async def search(self, query: str, top_k: int = 5) -> list[CogneeHit]:

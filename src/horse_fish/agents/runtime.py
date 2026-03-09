@@ -144,7 +144,7 @@ class DroidRuntime:
     ]
 
     def build_spawn_command(self, model: str) -> str:
-        return "droid"
+        return "droid --auto high"
 
     def build_env(self) -> dict[str, str]:
         api_key = os.environ.get("ZAI_API_KEY")

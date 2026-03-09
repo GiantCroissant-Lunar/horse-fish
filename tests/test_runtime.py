@@ -173,12 +173,12 @@ class TestDroidRuntime:
     def test_droid_spawn_command(self) -> None:
         runtime = DroidRuntime()
         command = runtime.build_spawn_command("glm-4.7")
-        assert command == "droid"
+        assert command == "droid --auto high"
 
     def test_droid_spawn_command_no_model(self) -> None:
         runtime = DroidRuntime()
         command = runtime.build_spawn_command("")
-        assert command == "droid"
+        assert command == "droid --auto high"
 
     def test_droid_build_env_passes_zai_key(self) -> None:
         with patch.dict(os.environ, {"ZAI_API_KEY": "test-zai-key"}):  # pragma: allowlist secret

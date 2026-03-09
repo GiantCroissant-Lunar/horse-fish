@@ -23,9 +23,9 @@ tasks:
       - pre-commit install
 
   env:
-    desc: Load secrets into shell and tmux
+    desc: Decrypt secrets.enc.json into .env
     cmds:
-      - source infra/setup-env.sh
+      - "{{.PYTHON}} scripts/load_secrets.py"
 
   test:
     desc: Run test suite
