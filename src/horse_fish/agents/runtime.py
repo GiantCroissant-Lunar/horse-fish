@@ -106,9 +106,25 @@ class OpenCodeRuntime:
         return {}
 
 
+@dataclass(slots=True)
+class BashRuntime:
+    """Adapter for plain bash shell — used in testing."""
+
+    runtime_id: ClassVar[str] = "bash"
+    ready_pattern: ClassVar[str] = r"\$\s*$"
+    ready_timeout_seconds: ClassVar[int] = 5
+
+    def build_spawn_command(self, model: str) -> str:
+        return "bash"
+
+    def build_env(self) -> dict[str, str]:
+        return {}
+
+
 RUNTIME_REGISTRY: dict[str, RuntimeAdapter] = {
     ClaudeRuntime.runtime_id: ClaudeRuntime(),
     CopilotRuntime.runtime_id: CopilotRuntime(),
     PiRuntime.runtime_id: PiRuntime(),
     OpenCodeRuntime.runtime_id: OpenCodeRuntime(),
+    BashRuntime.runtime_id: BashRuntime(),
 }

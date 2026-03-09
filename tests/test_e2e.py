@@ -88,7 +88,7 @@ def pool(store: Store, tmux: TmuxManager, worktrees: WorktreeManager) -> AgentPo
 async def test_e2e_single_subtask_creates_file(_mock_ready, pool: AgentPool) -> None:
     """Test that a single subtask can create a file via tmux."""
     # Spawn an agent with unique name to avoid duplicate session errors
-    slot = await pool.spawn(name="hf-e2e-single", runtime="claude", model="test", capability="builder")
+    slot = await pool.spawn(name="hf-e2e-single", runtime="bash", model="test", capability="builder")
 
     try:
         # Send shell command to create a file, git add, and commit
@@ -126,7 +126,7 @@ async def test_e2e_single_subtask_creates_file(_mock_ready, pool: AgentPool) -> 
 async def test_e2e_worktree_isolation(_mock_ready, pool: AgentPool, tmp_repo: Path) -> None:
     """Test that worktree isolation is properly maintained."""
     # Spawn an agent with unique name
-    slot = await pool.spawn(name="hf-e2e-isolation", runtime="claude", model="test", capability="builder")
+    slot = await pool.spawn(name="hf-e2e-isolation", runtime="bash", model="test", capability="builder")
 
     try:
         # Assert worktree isolation
