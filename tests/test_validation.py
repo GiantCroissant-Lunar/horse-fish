@@ -267,3 +267,106 @@ async def test_run_all_all_passed_helper(monkeypatch: pytest.MonkeyPatch, tmp_pa
     results = await vg.run_all(tmp_path)
 
     assert ValidationGates.all_passed(results) is True
+
+
+# ---------------------------------------------------------------------------
+# auto_fix — mocked
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_auto_fix_runs_ruff_fix_and_format(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """auto_fix should run ruff check --fix then ruff format, both on src/ tests/."""
+    calls: list = []
+    processes = [
+        FakeProcess(returncode=0, stdout="Fixed 2 errors"),  # ruff check --fix
+        FakeProcess(returncode=0, stdout="3 files reformatted"),  # ruff format
+    ]
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec_factory(processes, calls))
+
+    vg = ValidationGates()
+    result = await vg.auto_fix(tmp_path)
+
+    assert result.gate == "auto-fix"
+    assert result.passed is True
+    assert "Fixed 2 errors" in result.output
+    assert "3 files reformatted" in result.output
+    # Verify first call is ruff check --fix
+    assert calls[0][0][:4] == ("ruff", "check", "--fix", "src/")
+    # Verify second call is ruff format (without --check)
+    assert calls[1][0][:3] == ("ruff", "format", "src/")
+    assert "--check" not in calls[1][0]
+
+
+@pytest.mark.asyncio
+async def test_auto_fix_returns_failed_on_unfixable_errors(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """auto_fix should return passed=False when ruff check --fix exits non-zero."""
+    calls: list = []
+    processes = [
+        FakeProcess(returncode=1, stdout="E999 SyntaxError: unfixable"),  # ruff check --fix fails
+    ]
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec_factory(processes, calls))
+
+    vg = ValidationGates()
+    result = await vg.auto_fix(tmp_path)
+
+    assert result.gate == "auto-fix"
+    assert result.passed is False
+    assert "unfixable" in result.output
+    # Should not have called ruff format
+    assert len(calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# auto_fix_and_commit — mocked
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_auto_fix_and_commit_commits_changes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """auto_fix_and_commit should git add, detect changes, and git commit."""
+    calls: list = []
+    processes = [
+        FakeProcess(returncode=0, stdout="Fixed 1 error"),  # ruff check --fix
+        FakeProcess(returncode=0, stdout="1 file reformatted"),  # ruff format
+        FakeProcess(returncode=0, stdout=""),  # git add -A
+        FakeProcess(returncode=1, stdout=""),  # git diff --cached --quiet (1 = has changes)
+        FakeProcess(returncode=0, stdout="[branch abc123] chore: auto-fix lint"),  # git commit
+    ]
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec_factory(processes, calls))
+
+    vg = ValidationGates()
+    result = await vg.auto_fix_and_commit(tmp_path)
+
+    assert result.gate == "auto-fix"
+    assert result.passed is True
+    # Verify git add -A was called
+    assert calls[2][0][:3] == ("git", "add", "-A")
+    # Verify git diff --cached --quiet was called
+    assert calls[3][0][:4] == ("git", "diff", "--cached", "--quiet")
+    # Verify git commit was called with the right message
+    assert calls[4][0][:4] == ("git", "commit", "-m", "chore: auto-fix lint")
+
+
+@pytest.mark.asyncio
+async def test_auto_fix_and_commit_skips_commit_when_no_changes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """auto_fix_and_commit should skip git commit when diff --cached --quiet returns 0."""
+    calls: list = []
+    processes = [
+        FakeProcess(returncode=0, stdout="All checks passed"),  # ruff check --fix
+        FakeProcess(returncode=0, stdout=""),  # ruff format
+        FakeProcess(returncode=0, stdout=""),  # git add -A
+        FakeProcess(returncode=0, stdout=""),  # git diff --cached --quiet (0 = no changes)
+    ]
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec_factory(processes, calls))
+
+    vg = ValidationGates()
+    result = await vg.auto_fix_and_commit(tmp_path)
+
+    assert result.gate == "auto-fix"
+    assert result.passed is True
+    assert "no changes to commit" in result.output
+    # Should only have 4 calls (no git commit)
+    assert len(calls) == 4
