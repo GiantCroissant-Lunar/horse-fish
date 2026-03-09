@@ -584,6 +584,48 @@ async def test_collect_result_runtime_observations_include_subtask_context() -> 
 
 
 @pytest.mark.asyncio
+async def test_runtime_observation_summary_counts_deduped_events() -> None:
+    """runtime_observation_summary should aggregate deduped tool/prompt events by run."""
+    store = make_store()
+    tmux = MagicMock()
+    tmux.spawn = AsyncMock(return_value=7)
+    tmux.send_keys = AsyncMock()
+    tmux.capture_pane = AsyncMock(
+        side_effect=[
+            "Ready\n❯ \n",
+            "⏺ Bash(git status --short)\nConfirm to bypass permissions?\n",
+            "⏺ Bash(git status --short)\nConfirm to bypass permissions?\n",
+        ]
+    )
+    worktrees = MagicMock()
+    worktrees.create = AsyncMock(return_value=make_worktree_info())
+    worktrees.get_diff = AsyncMock(return_value="")
+    tracer = MagicMock()
+
+    pool = make_pool(store, tmux, worktrees, tracer=tracer)
+    slot = await pool.spawn("agent-1", "claude", "model", "builder")
+    await pool.send_task(
+        slot.id,
+        "implement feature X",
+        task_id="subtask-1",
+        run_id="run-1",
+        subtask_description="Implement feature X",
+    )
+
+    await pool.collect_result(slot.id)
+    await pool.collect_result(slot.id)
+
+    summary = pool.runtime_observation_summary("run-1")
+    assert summary["total_count"] == 2
+    assert summary["tool_count"] == 1
+    assert summary["prompt_count"] == 1
+    assert summary["subtasks_with_runtime_observations"] == 1
+    assert summary["runtimes"] == {"claude": 2}
+    assert summary["observation_names"]["Bash"] == 1
+    assert summary["observation_names"]["permission_prompt"] == 1
+
+
+@pytest.mark.asyncio
 async def test_collect_result_emits_runtime_tool_and_prompt_spans() -> None:
     """collect_result should emit runtime-derived tool and prompt observations once."""
     store = make_store()

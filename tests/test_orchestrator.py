@@ -18,6 +18,16 @@ def mock_pool():
     pool = AsyncMock()
     pool._get_slot = MagicMock()
     pool._worktrees = AsyncMock()
+    pool.runtime_observation_summary = MagicMock(
+        return_value={
+            "total_count": 0,
+            "tool_count": 0,
+            "prompt_count": 0,
+            "subtasks_with_runtime_observations": 0,
+            "runtimes": {},
+            "observation_names": {},
+        }
+    )
     return pool
 
 
@@ -1217,6 +1227,9 @@ async def test_run_scores_trace_outcomes(mock_pool, mock_planner, mock_gates):
     assert "execution_retry_count" in score_names
     assert "gate_retry_count" in score_names
     assert "merge_conflict_count" in score_names
+    assert "runtime_observation_count" in score_names
+    assert "runtime_tool_observation_count" in score_names
+    assert "runtime_prompt_observation_count" in score_names
 
 
 def test_score_run_outcomes_includes_retry_and_merge_metrics(mock_pool, mock_planner, mock_gates):
@@ -1244,6 +1257,14 @@ def test_score_run_outcomes_includes_retry_and_merge_metrics(mock_pool, mock_pla
     orchestrator._merge_conflicts = [
         {"subtask_id": "subtask-2", "branch": "horse-fish/hf-subtask-2", "conflict_files": []}
     ]
+    mock_pool.runtime_observation_summary.return_value = {
+        "total_count": 3,
+        "tool_count": 2,
+        "prompt_count": 1,
+        "subtasks_with_runtime_observations": 1,
+        "runtimes": {"claude": 3},
+        "observation_names": {"Bash": 2, "permission_prompt": 1},
+    }
 
     orchestrator._score_run_outcomes(run, trace)
 
@@ -1254,6 +1275,16 @@ def test_score_run_outcomes_includes_retry_and_merge_metrics(mock_pool, mock_pla
     assert score_calls["retry_exhausted_count"].args[2] == 1.0
     assert score_calls["merge_conflict_count"].args[2] == 1.0
     assert score_calls["merge_conflict"].args[2] == "conflict"
+    assert score_calls["runtime_observation_count"].args[2] == 3.0
+    assert score_calls["runtime_observation_count"].kwargs["metadata"] == {
+        "tool_count": 2,
+        "prompt_count": 1,
+        "subtasks_with_runtime_observations": 1,
+        "runtimes": {"claude": 3},
+        "observation_names": {"Bash": 2, "permission_prompt": 1},
+    }
+    assert score_calls["runtime_tool_observation_count"].args[2] == 2.0
+    assert score_calls["runtime_prompt_observation_count"].args[2] == 1.0
 
 
 @pytest.mark.asyncio

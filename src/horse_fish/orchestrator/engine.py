@@ -136,6 +136,7 @@ class Orchestrator:
         """Emit run-level Langfuse scores after the state machine finishes."""
         if not self._tracer or not trace:
             return
+        runtime_summary = self._pool.runtime_observation_summary(run.id)
 
         self._tracer.score_trace(
             trace,
@@ -193,6 +194,31 @@ class Orchestrator:
             "conflict" if self._merge_conflicts else "clean",
             data_type="CATEGORICAL",
             metadata={"count": len(self._merge_conflicts)},
+        )
+        self._tracer.score_trace(
+            trace,
+            "runtime_observation_count",
+            float(runtime_summary["total_count"]),
+            data_type="NUMERIC",
+            metadata={
+                "tool_count": runtime_summary["tool_count"],
+                "prompt_count": runtime_summary["prompt_count"],
+                "subtasks_with_runtime_observations": runtime_summary["subtasks_with_runtime_observations"],
+                "runtimes": runtime_summary["runtimes"],
+                "observation_names": runtime_summary["observation_names"],
+            },
+        )
+        self._tracer.score_trace(
+            trace,
+            "runtime_tool_observation_count",
+            float(runtime_summary["tool_count"]),
+            data_type="NUMERIC",
+        )
+        self._tracer.score_trace(
+            trace,
+            "runtime_prompt_observation_count",
+            float(runtime_summary["prompt_count"]),
+            data_type="NUMERIC",
         )
 
     def _persist_run(self, run: Run) -> None:

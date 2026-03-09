@@ -35,6 +35,7 @@ class AgentPool:
         self._tracer = tracer
         self._seen_runtime_observations: dict[str, set[tuple[str, str, str]]] = {}
         self._active_task_contexts: dict[str, dict[str, Any]] = {}
+        self._runtime_observation_stats: dict[str, dict[str, Any]] = {}
 
     def _trace_span(self, name: str, **metadata):
         """Create a best-effort span for agent lifecycle operations."""
@@ -61,6 +62,7 @@ class AgentPool:
             if key in seen:
                 continue
             seen.add(key)
+            self._record_runtime_observation(slot, observation, task_context)
             span = self._trace_span(
                 f"agent.runtime_{observation.kind}",
                 agent_id=slot.id,
@@ -76,6 +78,58 @@ class AgentPool:
                     {"detected": True},
                     metadata={"excerpt": observation.excerpt},
                 )
+
+    def _record_runtime_observation(self, slot: AgentSlot, observation, task_context: dict[str, Any]) -> None:
+        """Accumulate per-run observation counts for Langfuse scoring."""
+        run_id = task_context.get("run_id")
+        if not run_id:
+            return
+
+        stats = self._runtime_observation_stats.setdefault(
+            run_id,
+            {
+                "total_count": 0,
+                "tool_count": 0,
+                "prompt_count": 0,
+                "subtasks": set(),
+                "runtimes": {},
+                "observation_names": {},
+            },
+        )
+        stats["total_count"] += 1
+        if observation.kind == "tool":
+            stats["tool_count"] += 1
+        elif observation.kind == "prompt":
+            stats["prompt_count"] += 1
+
+        subtask_id = task_context.get("subtask_id")
+        if subtask_id:
+            stats["subtasks"].add(subtask_id)
+
+        stats["runtimes"][slot.runtime] = stats["runtimes"].get(slot.runtime, 0) + 1
+        stats["observation_names"][observation.name] = stats["observation_names"].get(observation.name, 0) + 1
+
+    def runtime_observation_summary(self, run_id: str) -> dict[str, Any]:
+        """Return per-run counts for runtime-derived observations."""
+        stats = self._runtime_observation_stats.get(run_id)
+        if not stats:
+            return {
+                "total_count": 0,
+                "tool_count": 0,
+                "prompt_count": 0,
+                "subtasks_with_runtime_observations": 0,
+                "runtimes": {},
+                "observation_names": {},
+            }
+
+        return {
+            "total_count": stats["total_count"],
+            "tool_count": stats["tool_count"],
+            "prompt_count": stats["prompt_count"],
+            "subtasks_with_runtime_observations": len(stats["subtasks"]),
+            "runtimes": dict(stats["runtimes"]),
+            "observation_names": dict(stats["observation_names"]),
+        }
 
     async def spawn(self, name: str, runtime: str, model: str, capability: str) -> AgentSlot:
         """Create a worktree, start a tmux session, persist the slot, and return it."""

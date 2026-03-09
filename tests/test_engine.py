@@ -19,6 +19,16 @@ def mock_pool():
     pool = AsyncMock()
     pool._get_slot = MagicMock()
     pool._worktrees = AsyncMock()
+    pool.runtime_observation_summary = MagicMock(
+        return_value={
+            "total_count": 0,
+            "tool_count": 0,
+            "prompt_count": 0,
+            "subtasks_with_runtime_observations": 0,
+            "runtimes": {},
+            "observation_names": {},
+        }
+    )
     return pool
 
 
