@@ -129,7 +129,7 @@ class DroidRuntime:
     """Adapter for the Factory AI Droid CLI (GLM-4.7 via Z.AI)."""
 
     runtime_id: ClassVar[str] = "droid"
-    ready_pattern: ClassVar[str] = r"❯|>\s*$|droid"
+    ready_pattern: ClassVar[str] = r"shift\+tab to cycle|>\s*Try|for help"
     ready_timeout_seconds: ClassVar[int] = 45
 
     def build_spawn_command(self, model: str) -> str:

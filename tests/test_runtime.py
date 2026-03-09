@@ -194,9 +194,9 @@ class TestDroidRuntime:
 
     def test_droid_ready_pattern(self) -> None:
         pattern = re.compile(DroidRuntime.ready_pattern)
-        assert pattern.search("❯ ")
-        assert pattern.search("Welcome to droid")
-        assert pattern.search("> ")
+        assert pattern.search("shift+tab to cycle modes (auto/spec)")
+        assert pattern.search('> Try "Optimize the performance"')
+        assert pattern.search("? for help")
 
     def test_droid_in_runtime_registry(self) -> None:
         assert "droid" in RUNTIME_REGISTRY
