@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from horse_fish.dashboard.app import DashApp
 from horse_fish.dashboard.widgets import AgentLog, AgentTable, PipelineBar, SubtaskTable
 from horse_fish.store.db import Store
