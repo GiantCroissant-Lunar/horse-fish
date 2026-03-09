@@ -156,16 +156,17 @@ class MemoryStore:
             tags=tags or [],
         )
 
-        # Store in memvid (backward compat)
+        # Store in memvid (backward compat, optional)
         import asyncio
 
         try:
             asyncio.get_running_loop()
-            # We're in an async context, create a task
             asyncio.create_task(self._store_in_memvid_async(content, entry))
         except RuntimeError:
-            # No running loop, use sync wrapper
-            self._store_in_memvid_sync(content, entry)
+            try:
+                self._store_in_memvid_sync(content, entry)
+            except Exception:
+                pass  # memvid not installed, skip
 
         # Store in SQLite side-table
         if self._store is not None:

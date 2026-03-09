@@ -556,5 +556,127 @@ def smoke(runtime: str, model: str | None):
         click.echo("Cleaned up seed files")
 
 
+@main.group()
+def memory():
+    """Manage agent memory (memvid + Cognee)."""
+
+
+@memory.command()
+@click.argument("content")
+@click.option("--agent", default="interactive", help="Agent name")
+@click.option("--domain", default="general", help="Domain/category")
+@click.option("--tags", default="", help="Comma-separated tags")
+def store(content, agent, domain, tags):
+    """Store a memory entry."""
+    from horse_fish.memory.store import MemoryStore
+    from horse_fish.store.db import Store
+
+    tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+    store_db = Store(DB_PATH)
+    store_db.migrate()
+    try:
+        mem = MemoryStore(store=store_db)
+        entry_id = mem.store_entry(content, agent=agent, domain=domain, tags=tag_list)
+        click.echo(f"Stored memory entry: {entry_id}")
+    finally:
+        store_db.close()
+
+
+@memory.command()
+@click.argument("query")
+@click.option("--top-k", default=5, type=int, help="Number of results")
+def search(query, top_k):
+    """Search memory via Cognee knowledge graph."""
+    if CogneeMemory is None:
+        click.echo("Error: CogneeMemory not available. Install cognee to use this command.")
+        return
+
+    has_llm_key = os.environ.get("INCEPTION_API_KEY") or os.environ.get("DASHSCOPE_API_KEY")
+    if not has_llm_key:
+        click.echo("Error: No LLM API key found. Set INCEPTION_API_KEY or DASHSCOPE_API_KEY.")
+        return
+
+    cognee_mem = CogneeMemory()
+
+    async def _search():
+        hits = await cognee_mem.search(query, top_k=top_k)
+        if not hits:
+            click.echo("No results found.")
+            return
+        for hit in hits:
+            click.echo(f"[{hit.score:.2f}] {hit.content}")
+
+    asyncio.run(_search())
+
+
+@memory.command()
+def organize():
+    """Batch ingest uningested entries into Cognee."""
+    if CogneeMemory is None:
+        click.echo("Error: CogneeMemory not available. Install cognee to use this command.")
+        return
+
+    has_llm_key = os.environ.get("INCEPTION_API_KEY") or os.environ.get("DASHSCOPE_API_KEY")
+    if not has_llm_key:
+        click.echo("Error: No LLM API key found. Set INCEPTION_API_KEY or DASHSCOPE_API_KEY.")
+        return
+
+    from horse_fish.memory.store import MemoryStore
+    from horse_fish.store.db import Store
+
+    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+    store_db = Store(DB_PATH)
+    store_db.migrate()
+    try:
+        memory_store = MemoryStore(store=store_db)
+        entries = memory_store.get_uningested()
+        if not entries:
+            click.echo("No uningested entries found.")
+            return
+
+        cognee_mem = CogneeMemory()
+
+        async def _ingest():
+            count = await cognee_mem.batch_ingest(entries)
+            if count > 0:
+                memory_store.mark_ingested([e.id for e in entries])
+            return count
+
+        ingested = asyncio.run(_ingest())
+        click.echo(f"Ingested {ingested} entries into Cognee.")
+    finally:
+        store_db.close()
+
+
+@memory.command("status")
+def memory_status():
+    """Show memory system status."""
+    from horse_fish.store.db import Store
+
+    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+    store_db = Store(DB_PATH)
+    store_db.migrate()
+    try:
+        total = store_db.fetchone("SELECT COUNT(*) as count FROM memory_entries")["count"]
+        uningested = store_db.fetchone("SELECT COUNT(*) as count FROM memory_entries WHERE ingested = 0")["count"]
+
+        click.echo("Memory System Status")
+        click.echo("=" * 40)
+        click.echo(f"Total entries:      {total}")
+        click.echo(f"Uningested entries: {uningested}")
+
+        if CogneeMemory is None:
+            click.echo("Cognee:             not installed")
+        else:
+            has_llm_key = os.environ.get("INCEPTION_API_KEY") or os.environ.get("DASHSCOPE_API_KEY")
+            if has_llm_key:
+                click.echo("Cognee:             available (LLM key configured)")
+            else:
+                click.echo("Cognee:             installed (no LLM key)")
+    finally:
+        store_db.close()
+
+
 if __name__ == "__main__":
     main()
