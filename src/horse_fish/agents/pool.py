@@ -161,14 +161,28 @@ class AgentPool:
         timeout = adapter.ready_timeout_seconds
         elapsed = 0.0
 
+        dismiss_compiled = [(re.compile(p, re.MULTILINE), key) for p, key in adapter.dismiss_patterns]
+        dismissed: set[str] = set()
+
         while elapsed < timeout:
             output = await self._tmux.capture_pane(slot.tmux_session)
-            if output and pattern.search(output):
-                # Send post-ready commands (e.g. model selection for droid)
-                for cmd in adapter.post_ready_commands(slot.model):
-                    await self._tmux.send_keys(slot.tmux_session, cmd)
-                    await asyncio.sleep(2.0)
-                return
+            if output:
+                # Check for dialogs that need dismissing
+                dialog_found = False
+                for dismiss_re, key in dismiss_compiled:
+                    pat_str = dismiss_re.pattern
+                    if pat_str not in dismissed and dismiss_re.search(output):
+                        await self._tmux.send_raw_key(slot.tmux_session, key)
+                        dismissed.add(pat_str)
+                        await asyncio.sleep(1.0)
+                        dialog_found = True
+                        break
+                if not dialog_found and pattern.search(output):
+                    # Send post-ready commands (e.g. model selection for droid)
+                    for cmd in adapter.post_ready_commands(slot.model):
+                        await self._tmux.send_keys(slot.tmux_session, cmd)
+                        await asyncio.sleep(2.0)
+                    return
             await asyncio.sleep(1.0)
             elapsed += 1.0
 

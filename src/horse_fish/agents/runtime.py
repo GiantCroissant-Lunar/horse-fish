@@ -33,6 +33,7 @@ class RuntimeAdapter(Protocol):
     runtime_id: str
     ready_pattern: str
     ready_timeout_seconds: int
+    dismiss_patterns: list[tuple[str, str]]  # [(pattern, key_to_send), ...]
 
     def build_spawn_command(self, model: str) -> str:
         """Build the CLI command used to launch a runtime."""
@@ -51,6 +52,7 @@ class ClaudeRuntime:
     runtime_id: ClassVar[str] = "claude"
     ready_pattern: ClassVar[str] = r"❯|shift\+tab|bypass permissions"
     ready_timeout_seconds: ClassVar[int] = 30
+    dismiss_patterns: ClassVar[list[tuple[str, str]]] = []
 
     def build_spawn_command(self, model: str) -> str:
         if model:
@@ -71,6 +73,7 @@ class CopilotRuntime:
     runtime_id: ClassVar[str] = "copilot"
     ready_pattern: ClassVar[str] = r"^(❯\s|>\s)"
     ready_timeout_seconds: ClassVar[int] = 30
+    dismiss_patterns: ClassVar[list[tuple[str, str]]] = []
 
     def build_spawn_command(self, model: str) -> str:
         return f"copilot --model {shlex.quote(model)} --allow-all-tools"
@@ -89,6 +92,7 @@ class PiRuntime:
     runtime_id: ClassVar[str] = "pi"
     ready_pattern: ClassVar[str] = r"\d+\.\d+%/\d+\S+"
     ready_timeout_seconds: ClassVar[int] = 45
+    dismiss_patterns: ClassVar[list[tuple[str, str]]] = []
 
     def build_spawn_command(self, model: str) -> str:
         return f"pi --provider dashscope --model {shlex.quote(model)}"
@@ -110,6 +114,7 @@ class OpenCodeRuntime:
     runtime_id: ClassVar[str] = "opencode"
     ready_pattern: ClassVar[str] = r"^(>\s|›\s)"
     ready_timeout_seconds: ClassVar[int] = 45
+    dismiss_patterns: ClassVar[list[tuple[str, str]]] = []
 
     def build_spawn_command(self, model: str) -> str:
         return f"opencode -m {shlex.quote(model)}"
@@ -128,6 +133,7 @@ class KimiRuntime:
     runtime_id: ClassVar[str] = "kimi"
     ready_pattern: ClassVar[str] = r"yolo\s+agent|Send /help"
     ready_timeout_seconds: ClassVar[int] = 30
+    dismiss_patterns: ClassVar[list[tuple[str, str]]] = []
 
     def build_spawn_command(self, model: str) -> str:
         cmd = "kimi --yolo"
@@ -149,6 +155,12 @@ class DroidRuntime:
     runtime_id: ClassVar[str] = "droid"
     ready_pattern: ClassVar[str] = r"shift\+tab to cycle|>\s*Try|for help"
     ready_timeout_seconds: ClassVar[int] = 45
+    # Dismiss first-run dialogs (Spec Mode config, Login prompt)
+    dismiss_patterns: ClassVar[list[tuple[str, str]]] = [
+        (r"Select another model for Spec Mode", "Enter"),
+        (r"Spec Mode Model Configuration", "Enter"),
+        (r"> Login", "Enter"),
+    ]
 
     def build_spawn_command(self, model: str) -> str:
         return "droid"
@@ -174,6 +186,7 @@ class BashRuntime:
     runtime_id: ClassVar[str] = "bash"
     ready_pattern: ClassVar[str] = r"\$\s*$"
     ready_timeout_seconds: ClassVar[int] = 5
+    dismiss_patterns: ClassVar[list[tuple[str, str]]] = []
 
     def build_spawn_command(self, model: str) -> str:
         return "bash"

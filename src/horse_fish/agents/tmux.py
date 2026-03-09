@@ -53,6 +53,14 @@ class TmuxManager:
                 f"failed to send enter to {session_name!r}: {self._describe_tmux_error(enter_result.stderr)}"
             )
 
+    async def send_raw_key(self, session_name: str, key: str) -> None:
+        """Send a raw key (e.g. 'Enter', 'Escape') without -l flag."""
+        result = await self._run_tmux("send-keys", "-t", session_name, key)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"failed to send key {key!r} to {session_name!r}: {self._describe_tmux_error(result.stderr)}"
+            )
+
     async def capture_pane(self, session_name: str) -> str | None:
         result = await self._run_tmux("capture-pane", "-t", session_name, "-p")
         if result.returncode != 0:

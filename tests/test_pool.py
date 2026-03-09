@@ -123,12 +123,16 @@ async def test_spawn_raises_on_ready_timeout() -> None:
         runtime_id = "claude"
         ready_pattern = r"[❯>]\s*$"
         ready_timeout_seconds = 2
+        dismiss_patterns: list[tuple[str, str]] = []
 
         def build_spawn_command(self, model: str) -> str:
             return "claude"
 
         def build_env(self) -> dict[str, str]:
             return {}
+
+        def post_ready_commands(self, model: str) -> list[str]:
+            return []
 
     try:
         runtime.RUNTIME_REGISTRY["claude"] = FastTimeoutClaudeRuntime()
