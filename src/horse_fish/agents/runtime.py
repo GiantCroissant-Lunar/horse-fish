@@ -107,6 +107,24 @@ class OpenCodeRuntime:
 
 
 @dataclass(slots=True)
+class KimiRuntime:
+    """Adapter for the Kimi Code CLI (kimi-for-coding)."""
+
+    runtime_id: ClassVar[str] = "kimi"
+    ready_pattern: ClassVar[str] = r"yolo\s+agent|Send /help"
+    ready_timeout_seconds: ClassVar[int] = 30
+
+    def build_spawn_command(self, model: str) -> str:
+        cmd = "kimi --yolo"
+        if model:
+            cmd += f" --model {shlex.quote(model)}"
+        return cmd
+
+    def build_env(self) -> dict[str, str]:
+        return {}
+
+
+@dataclass(slots=True)
 class BashRuntime:
     """Adapter for plain bash shell — used in testing."""
 
@@ -126,5 +144,6 @@ RUNTIME_REGISTRY: dict[str, RuntimeAdapter] = {
     CopilotRuntime.runtime_id: CopilotRuntime(),
     PiRuntime.runtime_id: PiRuntime(),
     OpenCodeRuntime.runtime_id: OpenCodeRuntime(),
+    KimiRuntime.runtime_id: KimiRuntime(),
     BashRuntime.runtime_id: BashRuntime(),
 }

@@ -9,6 +9,7 @@ from horse_fish.agents.runtime import (
     BashRuntime,
     ClaudeRuntime,
     CopilotRuntime,
+    KimiRuntime,
     OpenCodeRuntime,
     PiRuntime,
 )
@@ -135,3 +136,31 @@ class TestBashRuntime:
         """Bash runtime is registered in RUNTIME_REGISTRY."""
         assert "bash" in RUNTIME_REGISTRY
         assert isinstance(RUNTIME_REGISTRY["bash"], BashRuntime)
+
+
+class TestKimiRuntime:
+    """Tests for KimiRuntime adapter."""
+
+    def test_kimi_build_spawn_command_with_model(self) -> None:
+        runtime = KimiRuntime()
+        command = runtime.build_spawn_command("kimi-for-coding")
+        assert command == "kimi --yolo --model kimi-for-coding"
+
+    def test_kimi_build_spawn_command_empty_model(self) -> None:
+        runtime = KimiRuntime()
+        command = runtime.build_spawn_command("")
+        assert command == "kimi --yolo"
+
+    def test_kimi_build_env_empty(self) -> None:
+        runtime = KimiRuntime()
+        assert runtime.build_env() == {}
+
+    def test_kimi_ready_pattern(self) -> None:
+        runtime = KimiRuntime()
+        pattern = re.compile(runtime.ready_pattern)
+        assert pattern.search("09:48  yolo  agent  checking for updates...")
+        assert pattern.search("Send /help for help information.")
+
+    def test_kimi_in_runtime_registry(self) -> None:
+        assert "kimi" in RUNTIME_REGISTRY
+        assert isinstance(RUNTIME_REGISTRY["kimi"], KimiRuntime)
