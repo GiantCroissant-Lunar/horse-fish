@@ -455,28 +455,6 @@ async def test_cleanup_releases_dead_and_idle_agents() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cleanup_skips_busy_agents() -> None:
-    store = make_store()
-    tmux = MagicMock()
-    tmux.spawn = AsyncMock(return_value=1)
-    tmux.send_keys = AsyncMock()
-    tmux.kill_session = AsyncMock()
-    tmux.capture_pane = AsyncMock(return_value="Ready\n❯ \n")
-    worktrees = MagicMock()
-    worktrees.create = AsyncMock(return_value=make_worktree_info())
-    worktrees.remove = AsyncMock()
-    worktrees.cleanup = AsyncMock(return_value=0)
-
-    pool = make_pool(store, tmux, worktrees)
-    slot = await pool.spawn("agent-1", "claude", "model", "builder")
-    # Mark busy directly in store
-    store.execute("UPDATE agents SET state = ? WHERE id = ?", (AgentState.busy, slot.id))
-
-    count = await pool.cleanup()
-
-    assert count == 0
-    tmux.kill_session.assert_not_awaited()
-
 
 @pytest.mark.asyncio
 async def test_cleanup_releases_busy_agents() -> None:
