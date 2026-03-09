@@ -332,6 +332,33 @@ def test_span_without_trace_id_is_noop() -> None:
     },
 )
 @patch("langfuse.Langfuse")
+def test_span_without_trace_creates_standalone_observation(mock_langfuse_cls: MagicMock) -> None:
+    """span should support agent lifecycle spans without an explicit RunTrace."""
+    mock_client = MagicMock()
+    mock_span_obj = MagicMock()
+    mock_span_obj.id = "span-standalone"
+    mock_client.start_as_current_span.return_value = make_mock_context(mock_span_obj)
+    mock_langfuse_cls.return_value = mock_client
+
+    tracer = Tracer(enabled=True)
+    span = tracer.span(None, "agent.wait_for_ready", {"runtime": "claude"})
+
+    assert span.span_id == "span-standalone"
+    mock_client.start_as_current_span.assert_called_once_with(
+        name="agent.wait_for_ready",
+        metadata={"runtime": "claude"},
+        end_on_exit=False,
+    )
+
+
+@patch.dict(
+    os.environ,
+    {
+        "LANGFUSE_PUBLIC_KEY": "pk-test",
+        "LANGFUSE_SECRET_KEY": "sk-test",
+    },
+)
+@patch("langfuse.Langfuse")
 def test_exception_in_langfuse_does_not_break_tracer(mock_langfuse_cls: MagicMock) -> None:
     """Tracer should silently handle Langfuse exceptions."""
     mock_client = MagicMock()

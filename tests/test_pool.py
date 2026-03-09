@@ -100,6 +100,26 @@ async def test_spawn_waits_for_ready_pattern() -> None:
 
 
 @pytest.mark.asyncio
+async def test_spawn_traces_spawn_and_ready_spans() -> None:
+    """spawn should emit dedicated spans for agent startup and readiness."""
+    store = make_store()
+    tmux = MagicMock()
+    tmux.spawn = AsyncMock(return_value=1234)
+    tmux.capture_pane = AsyncMock(side_effect=["Loading...\n", "Loading...\n❯ \n"])
+    worktrees = MagicMock()
+    worktrees.create = AsyncMock(return_value=make_worktree_info("agent-1"))
+    tracer = MagicMock()
+    tracer.span.side_effect = [MagicMock(name="spawn-span"), MagicMock(name="ready-span")]
+
+    pool = make_pool(store, tmux, worktrees, tracer=tracer)
+    await pool.spawn("agent-1", "claude", "claude-sonnet-4-6", "builder")
+
+    span_names = [call.args[1] for call in tracer.span.call_args_list]
+    assert span_names == ["agent.spawn", "agent.wait_for_ready"]
+    assert tracer.end_span.call_count == 2
+
+
+@pytest.mark.asyncio
 async def test_spawn_raises_on_ready_timeout() -> None:
     """Test that spawn raises RuntimeError when ready timeout is exceeded."""
     store = make_store()
@@ -140,6 +160,35 @@ async def test_spawn_raises_on_ready_timeout() -> None:
             await pool.spawn("agent-1", "claude", "claude-sonnet-4-6", "builder")
     finally:
         runtime.RUNTIME_REGISTRY["claude"] = original_registry_entry
+
+
+@pytest.mark.asyncio
+async def test_respawn_traces_respawn_and_ready_spans() -> None:
+    """respawn should emit respawn and readiness spans."""
+    store = make_store()
+    tmux = MagicMock()
+    tmux.spawn = AsyncMock(return_value=9)
+    tmux.send_keys = AsyncMock()
+    tmux.capture_pane = AsyncMock(side_effect=["Ready\n❯ \n", "Ready\n❯ \n"])
+    tmux.kill_session = AsyncMock()
+    worktrees = MagicMock()
+    worktrees.create = AsyncMock(return_value=make_worktree_info())
+    tracer = MagicMock()
+    tracer.span.side_effect = [
+        MagicMock(name="spawn-span"),
+        MagicMock(name="spawn-ready-span"),
+        MagicMock(name="respawn-span"),
+        MagicMock(name="respawn-ready-span"),
+    ]
+
+    pool = make_pool(store, tmux, worktrees, tracer=tracer)
+    slot = await pool.spawn("agent-1", "claude", "model", "builder")
+
+    await pool.respawn(slot.id)
+
+    span_names = [call.args[1] for call in tracer.span.call_args_list]
+    assert span_names == ["agent.spawn", "agent.wait_for_ready", "agent.respawn", "agent.wait_for_ready"]
+    assert tracer.end_span.call_count == 4
 
 
 @pytest.mark.asyncio
@@ -286,7 +335,10 @@ async def test_send_task_traces_agent_prompt_generation() -> None:
 
     tracer.generation.assert_called_once()
     assert tracer.generation.call_args.args[1] == "agent.task_prompt"
-    tracer.end_span.assert_called_once()
+    generation_end_calls = [
+        call for call in tracer.end_span.call_args_list if call.args[0] is tracer.generation.return_value
+    ]
+    assert len(generation_end_calls) == 1
 
 
 @pytest.mark.asyncio

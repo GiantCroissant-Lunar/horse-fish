@@ -389,6 +389,69 @@ async def test_review_gate_failure(orchestrator, mock_pool, mock_gates):
 
 
 @pytest.mark.asyncio
+async def test_review_emits_gate_retry_span(mock_pool, mock_planner, mock_gates):
+    """_review should emit a dedicated span when gates trigger a retry."""
+    subtask = Subtask(
+        id="subtask-1",
+        description="Task 1",
+        state=SubtaskState.done,
+        agent="agent-1",
+        gate_retry_count=0,
+        max_gate_retries=1,
+    )
+    run = Run.create("Build system")
+    run.subtasks = [subtask]
+    run.state = RunState.reviewing
+
+    slot = AgentSlot(
+        id="agent-1",
+        name="hf-subtask-1",
+        runtime="claude",
+        model="claude-sonnet-4.6",
+        capability="builder",
+        state=AgentState.busy,
+        worktree_path="/tmp/worktree",
+    )
+    mock_pool._get_slot.return_value = slot
+    mock_pool.check_status = AsyncMock(return_value=AgentState.busy)
+    mock_pool.send_task = AsyncMock()
+    mock_gates.auto_fix_and_commit = AsyncMock(
+        return_value=GateResult(gate="auto-fix", passed=True, output="ok", duration_seconds=0.1)
+    )
+    mock_gates.run_all = AsyncMock(
+        return_value=[GateResult(gate="compile", passed=False, output="syntax error", duration_seconds=1.0)]
+    )
+    mock_gates.all_passed.return_value = False
+
+    gate_retry_span = MagicMock(name="gate-retry-span")
+    review_span = MagicMock(name="review-span")
+
+    def make_span(trace, name, metadata=None):
+        return gate_retry_span if name == "subtask.gate_retry" else review_span
+
+    mock_tracer = MagicMock()
+    mock_tracer.span.side_effect = make_span
+
+    orchestrator = Orchestrator(
+        pool=mock_pool,
+        planner=mock_planner,
+        gates=mock_gates,
+        runtime="claude",
+        tracer=mock_tracer,
+    )
+    orchestrator._active_trace = MagicMock()
+
+    result = await orchestrator._review(run)
+
+    assert result.state == RunState.executing
+    span_names = [call.args[1] for call in mock_tracer.span.call_args_list]
+    assert "subtask.gate_retry" in span_names
+    gate_retry_end_calls = [call for call in mock_tracer.end_span.call_args_list if call.args[0] is gate_retry_span]
+    assert gate_retry_end_calls
+    assert gate_retry_end_calls[-1].args[1] == {"action": "retry"}
+
+
+@pytest.mark.asyncio
 async def test_review_exception(orchestrator, mock_pool, mock_gates):
     """Test _review with exception → state becomes failed."""
     subtask = Subtask(id="subtask-1", description="Task 1", state=SubtaskState.done, agent="agent-1")
@@ -1633,3 +1696,44 @@ async def test_check_stalls_retries_stalled_subtask(mock_pool, mock_planner, moc
     assert subtask.last_activity_at is None
     assert "subtask-1" not in agent_map
     mock_pool.release.assert_called_once_with("agent-1")
+
+
+@pytest.mark.asyncio
+async def test_check_stalls_emits_stall_recovery_span(mock_pool, mock_planner, mock_gates):
+    """_check_stalls should emit a dedicated span for stall recovery actions."""
+    from datetime import timedelta
+
+    mock_tracer = MagicMock()
+    stall_span = MagicMock(name="stall-span")
+    mock_tracer.span.return_value = stall_span
+
+    orchestrator = Orchestrator(
+        pool=mock_pool,
+        planner=mock_planner,
+        gates=mock_gates,
+        runtime="claude",
+        tracer=mock_tracer,
+        stall_timeout_seconds=30,
+    )
+    orchestrator._active_trace = MagicMock()
+
+    subtask = Subtask(id="subtask-1", description="Task 1")
+    subtask.state = SubtaskState.running
+    subtask.agent = "agent-1"
+    subtask.last_activity_at = datetime.now(UTC) - timedelta(seconds=60)
+
+    run = Run.create("Build system")
+    run.subtasks = [subtask]
+    run.state = RunState.executing
+
+    agent_map = {"subtask-1": "agent-1"}
+    mock_pool.release = AsyncMock()
+
+    retried = await orchestrator._check_stalls(run, agent_map)
+
+    assert retried == 1
+    mock_tracer.span.assert_called_once()
+    assert mock_tracer.span.call_args.args[1] == "subtask.stall_recovery"
+    mock_tracer.end_span.assert_called_once()
+    assert mock_tracer.end_span.call_args.args[0] is stall_span
+    assert mock_tracer.end_span.call_args.args[1] == {"action": "retry"}

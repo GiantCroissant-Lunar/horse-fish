@@ -149,7 +149,7 @@ class Tracer:
 
         return trace
 
-    def span(self, trace: RunTrace, name: str, metadata: dict[str, Any] | None = None) -> Span:
+    def span(self, trace: RunTrace | None, name: str, metadata: dict[str, Any] | None = None) -> Span:
         """
         Create a span within a trace.
 
@@ -163,8 +163,9 @@ class Tracer:
         """
         span = Span(name=name, trace=trace, metadata=metadata)
 
-        if self._is_noop() or trace._root_observation is None:
-            trace.spans.append(span)
+        if self._is_noop() or (trace is not None and trace._root_observation is None):
+            if trace is not None:
+                trace.spans.append(span)
             return span
 
         try:
@@ -180,7 +181,8 @@ class Tracer:
         except Exception:
             pass
 
-        trace.spans.append(span)
+        if trace is not None:
+            trace.spans.append(span)
         return span
 
     def generation(

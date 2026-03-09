@@ -352,6 +352,13 @@ class Orchestrator:
             logger.warning("Subtask %s stalled (%.0fs since last activity)", subtask.id, elapsed)
 
             agent_id = agent_map.get(subtask.id)
+            stall_span = self._subtask_span(
+                "subtask.stall_recovery",
+                subtask,
+                elapsed_seconds=elapsed,
+                timeout_seconds=timeout,
+                stalled_agent_id=agent_id,
+            )
             if agent_id:
                 try:
                     await self._pool.release(agent_id)
@@ -369,6 +376,16 @@ class Orchestrator:
                 retried += 1
                 self._persist_subtask(subtask, run.id)
                 logger.info("Retrying subtask %s (attempt %d/%d)", subtask.id, subtask.retry_count, subtask.max_retries)
+                if stall_span:
+                    self._tracer.end_span(
+                        stall_span,
+                        {"action": "retry"},
+                        metadata={
+                            "retry_count": subtask.retry_count,
+                            "max_retries": subtask.max_retries,
+                        },
+                        level="WARNING",
+                    )
             else:
                 self._execution_retry_exhausted += 1
                 subtask.state = SubtaskState.failed
@@ -377,6 +394,17 @@ class Orchestrator:
                 failed += 1
                 self._persist_subtask(subtask, run.id)
                 logger.error("Subtask %s failed after %d retries", subtask.id, subtask.max_retries)
+                if stall_span:
+                    self._tracer.end_span(
+                        stall_span,
+                        {"action": "failed"},
+                        metadata={
+                            "retry_count": subtask.retry_count,
+                            "max_retries": subtask.max_retries,
+                        },
+                        level="ERROR",
+                        status_message="stall recovery exhausted retries",
+                    )
 
         return retried + failed
 
@@ -572,9 +600,17 @@ class Orchestrator:
             reviewed_subtasks += 1
 
             review_span = self._subtask_span("subtask.review", subtask)
+            gate_retry_span = None
             try:
                 slot = self._pool._get_slot(subtask.agent)
                 if not slot.worktree_path:
+                    if review_span:
+                        self._tracer.end_span(
+                            review_span,
+                            {"skipped": True},
+                            metadata={"reason": "missing worktree_path"},
+                            level="WARNING",
+                        )
                     continue
 
                 # Auto-fix lint before running gates
@@ -596,14 +632,21 @@ class Orchestrator:
                 # Gates failed — try retry
                 gate_output = "; ".join(f"{r.gate}: {r.output}" for r in results if not r.passed)
                 logger.warning("Subtask %s failed gates: %s", subtask.id, gate_output)
+                gate_retry_span = self._subtask_span(
+                    "subtask.gate_retry",
+                    subtask,
+                    gate_output=gate_output,
+                )
 
                 if subtask.gate_retry_count < subtask.max_gate_retries:
                     # Check agent is still alive; respawn if dead
                     agent_status = await self._pool.check_status(subtask.agent)
+                    respawned = False
                     if agent_status == AgentState.dead:
                         try:
                             logger.info("Respawning dead agent for subtask %s gate retry", subtask.id)
                             await self._pool.respawn(subtask.agent)
+                            respawned = True
                         except Exception as exc:
                             logger.error("Failed to respawn agent for subtask %s: %s", subtask.id, exc)
                             subtask.state = SubtaskState.failed
@@ -614,6 +657,14 @@ class Orchestrator:
                                     review_span,
                                     {"error": str(exc)},
                                     metadata={"passed": False},
+                                    level="ERROR",
+                                    status_message=str(exc),
+                                )
+                            if self._tracer and gate_retry_span:
+                                self._tracer.end_span(
+                                    gate_retry_span,
+                                    {"error": str(exc)},
+                                    metadata={"respawned": False},
                                     level="ERROR",
                                     status_message=str(exc),
                                 )
@@ -632,6 +683,17 @@ class Orchestrator:
                             review_span,
                             {"passed": False, "retrying": True},
                             metadata={"gate_output": gate_output},
+                            level="WARNING",
+                        )
+                    if self._tracer and gate_retry_span:
+                        self._tracer.end_span(
+                            gate_retry_span,
+                            {"action": "retry"},
+                            metadata={
+                                "gate_retry_count": subtask.gate_retry_count,
+                                "max_gate_retries": subtask.max_gate_retries,
+                                "respawned": respawned,
+                            },
                             level="WARNING",
                         )
                     logger.info(
@@ -655,18 +717,51 @@ class Orchestrator:
                         metadata={"gate_output": gate_output},
                         level="ERROR",
                     )
+                if self._tracer and gate_retry_span:
+                    self._tracer.end_span(
+                        gate_retry_span,
+                        {"action": "failed"},
+                        metadata={
+                            "gate_retry_count": subtask.gate_retry_count,
+                            "max_gate_retries": subtask.max_gate_retries,
+                        },
+                        level="ERROR",
+                        status_message="gate retry exhausted",
+                    )
 
             except KeyError as exc:
                 logger.error("Review failed for subtask %s — agent slot not found: %s", subtask.id, exc)
                 subtask.state = SubtaskState.failed
                 self._persist_subtask(subtask, run.id)
                 all_passed = False
+                if self._tracer and review_span:
+                    self._tracer.end_span(
+                        review_span,
+                        {"error": str(exc)},
+                        metadata={"passed": False},
+                        level="ERROR",
+                        status_message=str(exc),
+                    )
+                if self._tracer and gate_retry_span:
+                    self._tracer.end_span(
+                        gate_retry_span,
+                        {"error": str(exc)},
+                        level="ERROR",
+                        status_message=str(exc),
+                    )
             except Exception as exc:
                 logger.error("Review failed for subtask %s: %s", subtask.id, exc, exc_info=True)
                 subtask.state = SubtaskState.failed
                 self._persist_subtask(subtask, run.id)
                 all_passed = False
                 failed_subtasks += 1
+                if self._tracer and gate_retry_span:
+                    self._tracer.end_span(
+                        gate_retry_span,
+                        {"error": str(exc)},
+                        level="ERROR",
+                        status_message=str(exc),
+                    )
                 if self._tracer and review_span:
                     self._tracer.end_span(
                         review_span,
