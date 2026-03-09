@@ -1,0 +1,1 @@
+{"type":"pattern","name":"datatable-update-pattern","description":"DataTable widgets need on_mount to add_columns before update methods populate rows; update methods should clear() then add_row() with key for cursor tracking","classification":"tactical","recorded_at":"2026-03-09T01:55:59.800Z","outcomes":[{"status":"success","agent":"pi-dash-app"}],"id":"mx-0b8eb9"}
