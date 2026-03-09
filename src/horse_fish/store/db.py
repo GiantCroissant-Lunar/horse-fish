@@ -26,24 +26,23 @@ MIGRATIONS: list[tuple[int, str]] = [
 
         CREATE TABLE IF NOT EXISTS runs (
             id TEXT PRIMARY KEY,
-            task TEXT,
-            state TEXT,
-            created_at TEXT,
+            task TEXT NOT NULL,
+            state TEXT NOT NULL,
+            complexity TEXT,
+            created_at TEXT NOT NULL,
             completed_at TEXT
         );
 
         CREATE TABLE IF NOT EXISTS subtasks (
             id TEXT PRIMARY KEY,
-            run_id TEXT REFERENCES runs(id),
-            description TEXT,
-            agent TEXT,
+            run_id TEXT NOT NULL,
+            description TEXT NOT NULL,
+            state TEXT NOT NULL,
+            agent_id TEXT,
             deps TEXT,
-            files_hint TEXT,
-            state TEXT,
-            result_output TEXT,
-            result_diff TEXT,
-            result_duration REAL,
-            result_success INTEGER
+            retry_count INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (run_id) REFERENCES runs(id)
         );
 
         CREATE TABLE IF NOT EXISTS mail (
@@ -106,6 +105,44 @@ class Store:
                 self._conn.executescript(sql)
                 self._conn.execute("INSERT INTO schema_version (version) VALUES (?)", (version,))
                 self._conn.commit()
+
+    def upsert_run(
+        self,
+        run_id: str,
+        task: str,
+        state: str,
+        complexity: str | None = None,
+        created_at: str | None = None,
+        completed_at: str | None = None,
+    ) -> None:
+        """Insert or update a run record."""
+        self.execute(
+            """INSERT INTO runs (id, task, state, complexity, created_at, completed_at)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET state=excluded.state, complexity=excluded.complexity,
+               completed_at=excluded.completed_at, created_at=COALESCE(excluded.created_at, runs.created_at)""",
+            (run_id, task, state, complexity, created_at, completed_at),
+        )
+
+    def upsert_subtask(
+        self,
+        subtask_id: str,
+        run_id: str,
+        description: str,
+        state: str,
+        agent_id: str | None = None,
+        deps: str | None = None,
+        retry_count: int = 0,
+        created_at: str | None = None,
+    ) -> None:
+        """Insert or update a subtask record."""
+        self.execute(
+            """INSERT INTO subtasks (id, run_id, description, state, agent_id, deps, retry_count, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET state=excluded.state, agent_id=excluded.agent_id,
+               deps=excluded.deps, retry_count=excluded.retry_count""",
+            (subtask_id, run_id, description, state, agent_id, deps, retry_count, created_at),
+        )
 
     def execute(self, sql: str, params: tuple[Any, ...] | list[Any] = ()) -> sqlite3.Cursor:
         cursor = self._conn.execute(sql, params)

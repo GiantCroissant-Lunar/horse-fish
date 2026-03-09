@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import UTC, datetime
 
@@ -15,6 +16,7 @@ from horse_fish.models import AgentState, Run, RunState, Subtask, SubtaskResult,
 from horse_fish.observability.traces import Tracer
 from horse_fish.planner.decompose import Planner
 from horse_fish.planner.smart import SmartPlanner
+from horse_fish.store.db import Store
 from horse_fish.validation.gates import ValidationGates
 
 try:
@@ -52,6 +54,7 @@ class Orchestrator:
         cognee_memory: CogneeMemory | None = None,
         stall_timeout_seconds: int = STALL_TIMEOUT_SECONDS,
         concurrency_limits: dict[RunState, int] | None = None,
+        store: Store | None = None,
     ) -> None:
         self._pool = pool
         self._planner = planner
@@ -72,6 +75,7 @@ class Orchestrator:
         )
         self._stall_timeout = stall_timeout_seconds
         self._concurrency_limits = concurrency_limits or {}
+        self._store = store
 
         self._handlers: dict[RunState, _Handler] = {
             RunState.planning: self._plan,
@@ -80,9 +84,38 @@ class Orchestrator:
             RunState.merging: self._merge,
         }
 
+    def _persist_run(self, run: Run) -> None:
+        """Persist run state to SQLite."""
+        if not self._store:
+            return
+        self._store.upsert_run(
+            run_id=run.id,
+            task=run.task,
+            state=run.state.value,
+            complexity=run.complexity.value if run.complexity else None,
+            created_at=run.created_at.isoformat() if run.created_at else datetime.now(UTC).isoformat(),
+            completed_at=run.completed_at.isoformat() if run.completed_at else None,
+        )
+
+    def _persist_subtask(self, subtask: Subtask, run_id: str) -> None:
+        """Persist subtask state to SQLite."""
+        if not self._store:
+            return
+        self._store.upsert_subtask(
+            subtask_id=subtask.id,
+            run_id=run_id,
+            description=subtask.description,
+            state=subtask.state.value,
+            agent_id=subtask.agent,
+            deps=json.dumps(subtask.deps) if subtask.deps else None,
+            retry_count=subtask.retry_count,
+            created_at=datetime.now(UTC).isoformat(),
+        )
+
     async def run(self, task: str) -> Run:
         """Create a Run and drive it through the state machine until terminal."""
         run = Run.create(task)
+        self._persist_run(run)
         logger.info("Starting run %s for task: %s", run.id, task)
 
         trace = self._tracer.trace_run(run.id, task) if self._tracer else None
@@ -97,9 +130,11 @@ class Orchestrator:
             if self._tracer and span:
                 self._tracer.end_span(span, {"state": run.state.value})
 
+            self._persist_run(run)
             logger.info("Run %s transitioned to %s", run.id, run.state)
 
         run.completed_at = datetime.now(UTC)
+        self._persist_run(run)
 
         if self._tracer and trace:
             self._tracer.end_trace(trace, run.state.value)
@@ -187,12 +222,14 @@ class Orchestrator:
                 if subtask.id in agent_map:
                     del agent_map[subtask.id]
                 retried += 1
+                self._persist_subtask(subtask, run.id)
                 logger.info("Retrying subtask %s (attempt %d/%d)", subtask.id, subtask.retry_count, subtask.max_retries)
             else:
                 subtask.state = SubtaskState.failed
                 if subtask.id in agent_map:
                     del agent_map[subtask.id]
                 failed += 1
+                self._persist_subtask(subtask, run.id)
                 logger.error("Subtask %s failed after %d retries", subtask.id, subtask.max_retries)
 
         return retried + failed
@@ -219,7 +256,11 @@ class Orchestrator:
         subtasks = self._resolve_deps(subtasks)
 
         run.subtasks = subtasks
+        # Persist initial subtasks
+        for subtask in subtasks:
+            self._persist_subtask(subtask, run.id)
         run.state = RunState.executing
+        self._persist_run(run)
         return run
 
     async def _execute(self, run: Run) -> Run:
@@ -260,9 +301,11 @@ class Orchestrator:
                     subtask.last_activity_at = datetime.now(UTC)
                     agent_map[subtask.id] = slot.id
                     active_count += 1
+                    self._persist_subtask(subtask, run.id)
                 except Exception as exc:
                     logger.error("Failed to dispatch subtask %s: %s", subtask.id, exc)
                     subtask.state = SubtaskState.failed
+                    self._persist_subtask(subtask, run.id)
 
             # Check if all subtasks are terminal
             if all(s.state in (SubtaskState.done, SubtaskState.failed) for s in run.subtasks):
@@ -292,6 +335,7 @@ class Orchestrator:
                     subtask.result = result
                     self._stamp_provenance(result, run, agent_id)
                     subtask.state = SubtaskState.done if result.success else SubtaskState.failed
+                    self._persist_subtask(subtask, run.id)
                     active_count -= 1
                     continue
 
@@ -303,6 +347,7 @@ class Orchestrator:
                         self._stamp_provenance(result, run, agent_id)
                         subtask.state = SubtaskState.done
                         subtask.last_activity_at = datetime.now(UTC)
+                        self._persist_subtask(subtask, run.id)
                         active_count -= 1
                 except Exception:
                     pass
@@ -333,12 +378,14 @@ class Orchestrator:
                 results = await self._gates.run_all(slot.worktree_path)
                 if not self._gates.all_passed(results):
                     subtask.state = SubtaskState.failed
+                    self._persist_subtask(subtask, run.id)
                     all_passed = False
                     gate_output = "; ".join(f"{r.gate}: {r.output}" for r in results if not r.passed)
                     logger.warning("Subtask %s failed gates: %s", subtask.id, gate_output)
             except Exception as exc:
                 logger.error("Review failed for subtask %s: %s", subtask.id, exc)
                 subtask.state = SubtaskState.failed
+                self._persist_subtask(subtask, run.id)
                 all_passed = False
 
         run.state = RunState.merging if all_passed else RunState.failed

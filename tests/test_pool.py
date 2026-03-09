@@ -455,8 +455,6 @@ async def test_cleanup_releases_dead_and_idle_agents() -> None:
 
 
 @pytest.mark.asyncio
-
-@pytest.mark.asyncio
 async def test_cleanup_releases_busy_agents() -> None:
     """Test that cleanup() also releases busy agents."""
     store = make_store()
