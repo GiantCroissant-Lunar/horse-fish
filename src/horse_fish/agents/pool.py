@@ -6,6 +6,7 @@ import asyncio
 import re
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 from horse_fish.agents.prompt import resolve_fix_prompt, resolve_task_prompt
 from horse_fish.agents.runtime import RUNTIME_REGISTRY, extract_runtime_observations
@@ -33,6 +34,7 @@ class AgentPool:
         self._project_context = project_context
         self._tracer = tracer
         self._seen_runtime_observations: dict[str, set[tuple[str, str, str]]] = {}
+        self._active_task_contexts: dict[str, dict[str, Any]] = {}
 
     def _trace_span(self, name: str, **metadata):
         """Create a best-effort span for agent lifecycle operations."""
@@ -40,12 +42,20 @@ class AgentPool:
             return None
         return self._tracer.span(None, name, metadata)
 
+    def _task_context(self, slot: AgentSlot) -> dict[str, Any]:
+        """Return best-effort task context for agent-level observations."""
+        context = dict(self._active_task_contexts.get(slot.id, {}))
+        context.setdefault("task_id", slot.task_id)
+        context.setdefault("subtask_id", slot.task_id)
+        return context
+
     def _emit_runtime_output_observations(self, slot: AgentSlot, output: str) -> None:
         """Emit best-effort runtime tool/prompt observations from pane output."""
         if not self._tracer or not output:
             return
 
         seen = self._seen_runtime_observations.setdefault(slot.id, set())
+        task_context = self._task_context(slot)
         for observation in extract_runtime_observations(slot.runtime, output):
             key = (observation.kind, observation.name, observation.excerpt)
             if key in seen:
@@ -57,8 +67,8 @@ class AgentPool:
                 agent_name=slot.name,
                 runtime=slot.runtime,
                 model=slot.model,
-                task_id=slot.task_id,
                 observation_name=observation.name,
+                **task_context,
             )
             if self._tracer and span:
                 self._tracer.end_span(
@@ -160,9 +170,19 @@ class AgentPool:
         task_id: str | None = None,
         raw: bool = False,
         prompt_kind: str = "task",
+        run_id: str | None = None,
+        subtask_description: str | None = None,
     ) -> None:
         """Send a prompt to the agent's tmux session and mark it busy."""
         slot = self._get_slot(agent_id)
+        task_context = {
+            "run_id": run_id,
+            "task_id": task_id,
+            "subtask_id": task_id,
+            "subtask_description": subtask_description,
+            "prompt_kind": prompt_kind if not raw else "raw",
+        }
+        self._active_task_contexts[slot.id] = task_context
         generation = None
         if raw:
             full_prompt = prompt
@@ -179,6 +199,9 @@ class AgentPool:
                         "runtime": slot.runtime,
                         "model": slot.model,
                         "task_id": task_id,
+                        "run_id": run_id,
+                        "subtask_id": task_id,
+                        "subtask_description": subtask_description,
                         "prompt_name": prompt_name,
                         "prompt_source": prompt_source,
                         "prompt_version": prompt_version,
@@ -229,6 +252,9 @@ class AgentPool:
                         "runtime": slot.runtime,
                         "model": slot.model,
                         "task_id": task_id,
+                        "run_id": run_id,
+                        "subtask_id": task_id,
+                        "subtask_description": subtask_description,
                         "prompt_name": prompt_name,
                         "prompt_source": prompt_source,
                         "prompt_version": prompt_version,
@@ -253,6 +279,9 @@ class AgentPool:
                     "runtime": slot.runtime,
                     "model": slot.model,
                     "task_id": task_id,
+                    "run_id": run_id,
+                    "subtask_id": task_id,
+                    "subtask_description": subtask_description,
                     "prompt_name": prompt_name,
                     "prompt_source": prompt_source,
                     "prompt_version": prompt_version,
@@ -269,7 +298,7 @@ class AgentPool:
             runtime=slot.runtime,
             model=slot.model,
             prior_state=slot.state.value,
-            task_id=slot.task_id,
+            **self._task_context(slot),
         )
         try:
             alive = await self._tmux.is_alive(slot.tmux_session)
@@ -361,7 +390,7 @@ class AgentPool:
             agent_name=slot.name,
             runtime=slot.runtime,
             model=slot.model,
-            task_id=slot.task_id,
+            **self._task_context(slot),
         )
 
         try:
@@ -410,6 +439,7 @@ class AgentPool:
         await self._worktrees.remove(slot.name)
         self._store.execute("UPDATE agents SET state = ? WHERE id = ?", (AgentState.dead, agent_id))
         self._seen_runtime_observations.pop(agent_id, None)
+        self._active_task_contexts.pop(agent_id, None)
 
     def list_agents(self) -> list[AgentSlot]:
         """Return all persisted agent slots."""

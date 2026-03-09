@@ -569,6 +569,9 @@ async def test_review_retries_on_gate_failure(orchestrator, mock_pool, mock_gate
     mock_pool.send_task.assert_called_once()
     call_args = mock_pool.send_task.call_args
     assert "F401 unused import" in call_args[0][1]  # prompt contains gate output
+    assert call_args.kwargs["task_id"] == subtask.id
+    assert call_args.kwargs["run_id"] == run.id
+    assert call_args.kwargs["subtask_description"] == subtask.description
 
 
 @pytest.mark.asyncio
@@ -654,6 +657,10 @@ async def test_review_respawns_dead_agent_for_retry(orchestrator, mock_pool, moc
     # Should respawn, send fix prompt, and return to executing
     mock_pool.respawn.assert_called_once_with("agent-1")
     mock_pool.send_task.assert_called_once()
+    call_args = mock_pool.send_task.call_args
+    assert call_args.kwargs["task_id"] == subtask.id
+    assert call_args.kwargs["run_id"] == run.id
+    assert call_args.kwargs["subtask_description"] == subtask.description
     assert result.state == RunState.executing
     assert subtask.state == SubtaskState.running
     assert subtask.gate_retry_count == 1

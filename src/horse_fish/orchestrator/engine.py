@@ -481,7 +481,13 @@ class Orchestrator:
                             model=self._model,
                             capability="builder",
                         )
-                    await self._pool.send_task(slot.id, subtask.description, task_id=subtask.id)
+                    await self._pool.send_task(
+                        slot.id,
+                        subtask.description,
+                        task_id=subtask.id,
+                        run_id=run.id,
+                        subtask_description=subtask.description,
+                    )
                     subtask.state = SubtaskState.running
                     subtask.agent = slot.id
                     subtask.last_activity_at = datetime.now(UTC)
@@ -670,7 +676,14 @@ class Orchestrator:
                                 )
                             continue
 
-                    await self._pool.send_task(subtask.agent, gate_output, prompt_kind="fix")
+                    await self._pool.send_task(
+                        subtask.agent,
+                        gate_output,
+                        task_id=subtask.id,
+                        prompt_kind="fix",
+                        run_id=run.id,
+                        subtask_description=subtask.description,
+                    )
                     subtask.state = SubtaskState.running
                     subtask.gate_retry_count += 1
                     self._gate_retry_events += 1

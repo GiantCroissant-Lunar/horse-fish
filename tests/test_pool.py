@@ -537,6 +537,53 @@ async def test_collect_result_traces_execution_probe() -> None:
 
 
 @pytest.mark.asyncio
+async def test_collect_result_runtime_observations_include_subtask_context() -> None:
+    """Runtime output observations should carry the active orchestrator subtask context."""
+    store = make_store()
+    tmux = MagicMock()
+    tmux.spawn = AsyncMock(return_value=7)
+    tmux.send_keys = AsyncMock()
+    tmux.capture_pane = AsyncMock(
+        side_effect=[
+            "Ready\n❯ \n",
+            "⏺ Bash(git status --short)\nConfirm to bypass permissions?\n",
+        ]
+    )
+    worktrees = MagicMock()
+    worktrees.create = AsyncMock(return_value=make_worktree_info())
+    worktrees.get_diff = AsyncMock(return_value="")
+    tracer = MagicMock()
+    tracer.span.side_effect = [
+        MagicMock(name="spawn-span"),
+        MagicMock(name="ready-span"),
+        MagicMock(name="result-span"),
+        MagicMock(name="runtime-tool-span"),
+        MagicMock(name="runtime-prompt-span"),
+    ]
+
+    pool = make_pool(store, tmux, worktrees, tracer=tracer)
+    slot = await pool.spawn("agent-1", "claude", "model", "builder")
+    await pool.send_task(
+        slot.id,
+        "implement feature X",
+        task_id="subtask-1",
+        run_id="run-1",
+        subtask_description="Implement feature X",
+    )
+
+    await pool.collect_result(slot.id)
+
+    runtime_calls = [call for call in tracer.span.call_args_list if call.args[1].startswith("agent.runtime_")]
+    assert runtime_calls
+    for call in runtime_calls:
+        metadata = call.args[2]
+        assert metadata["run_id"] == "run-1"
+        assert metadata["subtask_id"] == "subtask-1"
+        assert metadata["subtask_description"] == "Implement feature X"
+        assert metadata["prompt_kind"] == "task"
+
+
+@pytest.mark.asyncio
 async def test_collect_result_emits_runtime_tool_and_prompt_spans() -> None:
     """collect_result should emit runtime-derived tool and prompt observations once."""
     store = make_store()
