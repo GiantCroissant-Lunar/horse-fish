@@ -12,6 +12,8 @@ domains:
   - typescript
   - runtime
   - store
+  - dashboard
+  - textual-widgets
 governance:
   max_entries: 100
   warn_entries: 150
