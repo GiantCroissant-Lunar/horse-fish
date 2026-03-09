@@ -43,10 +43,10 @@ class TestClaudeRuntime:
         assert "claude-sonnet-4-6" in command
 
     def test_claude_spawn_command_no_model(self) -> None:
-        """Claude spawn command without model returns just 'claude'."""
+        """Claude spawn command without model includes --dangerously-skip-permissions."""
         runtime = ClaudeRuntime()
         command = runtime.build_spawn_command("")
-        assert command == "claude"
+        assert command == "claude --dangerously-skip-permissions"
 
     def test_claude_ready_pattern_matches_prompt(self) -> None:
         """Claude ready_pattern matches expected prompt markers."""

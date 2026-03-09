@@ -36,9 +36,10 @@ class ClaudeRuntime:
     dismiss_patterns: ClassVar[list[tuple[str, str]]] = []
 
     def build_spawn_command(self, model: str) -> str:
+        parts = ["claude", "--dangerously-skip-permissions"]
         if model:
-            return f"claude --model {shlex.quote(model)}"
-        return "claude"
+            parts.extend(["--model", shlex.quote(model)])
+        return " ".join(parts)
 
     def build_env(self) -> dict[str, str]:
         return {}

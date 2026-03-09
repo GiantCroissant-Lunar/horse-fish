@@ -12,12 +12,15 @@ PROMPT_TEMPLATE = """You are an agent in the horse-fish swarm working in an isol
 ## Task Description
 {task}
 
-## Rules
-1. Run pytest to verify your changes pass tests.
-2. Run `ruff check --fix src/ tests/` and `ruff format src/ tests/` before committing.
-3. Commit your changes when done.
-4. Stay focused on the task at hand.
-5. Do not modify files outside your assigned scope.
+## Completion Checklist
+You MUST complete ALL of the following before committing:
+1. Implement every deliverable mentioned in the task description above — code, tests, CLI commands, etc.
+2. If the task asks for tests, create them. If it specifies a test file name, use that exact name.
+3. Run `ruff format src/ tests/` to fix line length and formatting.
+4. Run `ruff check --fix src/ tests/` to fix lint errors.
+5. Run `pytest tests/ -x -q` to verify all tests pass.
+6. Commit your changes: `git add --all && git commit -m "description"`.
+7. Do not modify files outside your assigned scope.
 """
 
 

@@ -82,13 +82,30 @@ class DashApp(App):
             pipeline_bar.run_state = "idle"
             pipeline_bar.run_id = ""
 
-        # Update agent table
-        agents = self._store.fetchall("SELECT * FROM agents")
+        # Update agent table — filter to current run's agents
+        current_run_id = run["id"] if runs else None
+        if current_run_id:
+            agent_q = "SELECT * FROM agents WHERE task_id IN (SELECT id FROM subtasks WHERE run_id = ?)"
+            agents = self._store.fetchall(agent_q, (current_run_id,))
+            if not agents:
+                # Fallback: show agents that were started after this run
+                agents = self._store.fetchall(
+                    "SELECT * FROM agents WHERE started_at >= ?",
+                    (run["created_at"],),
+                )
+        else:
+            agents = self._store.fetchall("SELECT * FROM agents")
         agent_table = self.query_one("#agent-table", AgentTable)
         agent_table.update_agents(agents)
 
-        # Update subtask table
-        subtasks = self._store.fetchall("SELECT * FROM subtasks ORDER BY created_at")
+        # Update subtask table — filter to current run
+        if current_run_id:
+            subtasks = self._store.fetchall(
+                "SELECT * FROM subtasks WHERE run_id = ? ORDER BY created_at",
+                (current_run_id,),
+            )
+        else:
+            subtasks = self._store.fetchall("SELECT * FROM subtasks ORDER BY created_at")
         subtask_table = self.query_one("#subtask-table", SubtaskTable)
         subtask_table.update_subtasks(subtasks)
 

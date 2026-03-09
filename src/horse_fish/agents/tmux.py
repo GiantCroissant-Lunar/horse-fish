@@ -42,10 +42,14 @@ class TmuxManager:
         except ValueError as exc:
             raise RuntimeError(f"tmux session {name!r} returned invalid pane pid: {pane_pid!r}") from exc
 
-    async def send_keys(self, session_name: str, text: str) -> None:
+    async def send_keys(self, session_name: str, text: str, enter_delay: float = 0.1) -> None:
         result = await self._run_tmux("send-keys", "-t", session_name, "-l", text)
         if result.returncode != 0:
             raise RuntimeError(f"failed to send keys to {session_name!r}: {self._describe_tmux_error(result.stderr)}")
+
+        # Small delay between paste and Enter to let the runtime process the input
+        if enter_delay > 0:
+            await asyncio.sleep(enter_delay)
 
         enter_result = await self._run_tmux("send-keys", "-t", session_name, "Enter")
         if enter_result.returncode != 0:

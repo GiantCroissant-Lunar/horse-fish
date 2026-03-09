@@ -325,6 +325,114 @@ def test_logs_no_sessions(mock_tmux_class, runner):
     mock_tmux.list_sessions.assert_called_once()
 
 
+class TestAgentsCommand:
+    """Tests for hf agents command."""
+
+    @patch("horse_fish.cli.Store")
+    def test_agents_no_agents(self, mock_store_class, runner):
+        """Shows message when no agents found."""
+        mock_store = MagicMock()
+        mock_store.fetchall.return_value = []
+        mock_store_class.return_value = mock_store
+
+        result = runner.invoke(main, ["agents"])
+        assert result.exit_code == 0
+        assert "No agents found" in result.output
+
+    @patch("horse_fish.cli.Store")
+    def test_agents_table_output(self, mock_store_class, runner):
+        """Prints table with agent info."""
+        mock_store = MagicMock()
+        mock_store.fetchall.return_value = [
+            {
+                "name": "hf-abc123",
+                "runtime": "kimi",
+                "model": "kimi-for-coding",
+                "state": "busy",
+                "task_id": "task-1",
+                "started_at": "2026-03-09T10:00:00+00:00",
+            },
+        ]
+        mock_store_class.return_value = mock_store
+
+        result = runner.invoke(main, ["agents"])
+        assert result.exit_code == 0
+        assert "hf-abc123" in result.output
+        assert "kimi" in result.output
+        assert "busy" in result.output
+        assert "task-1" in result.output
+
+    @patch("horse_fish.cli.Store")
+    def test_agents_state_filter(self, mock_store_class, runner):
+        """--state flag filters by agent state."""
+        mock_store = MagicMock()
+        mock_store.fetchall.return_value = []
+        mock_store_class.return_value = mock_store
+
+        result = runner.invoke(main, ["agents", "--state", "idle"])
+        assert result.exit_code == 0
+        # Verify the query included the state filter
+        call_args = mock_store.fetchall.call_args
+        assert "WHERE state = ?" in call_args[0][0]
+        assert call_args[0][1] == ("idle",)
+
+    @patch("horse_fish.cli.Store")
+    def test_agents_json_output(self, mock_store_class, runner):
+        """--json flag outputs JSON."""
+        mock_store = MagicMock()
+        mock_store.fetchall.return_value = [
+            {
+                "name": "hf-xyz",
+                "runtime": "claude",
+                "model": "claude-sonnet-4-6",
+                "state": "dead",
+                "task_id": None,
+                "started_at": "2026-03-09T10:00:00+00:00",
+            },
+        ]
+        mock_store_class.return_value = mock_store
+
+        result = runner.invoke(main, ["agents", "--json"])
+        assert result.exit_code == 0
+        import json
+
+        data = json.loads(result.output)
+        assert len(data) == 1
+        assert data[0]["name"] == "hf-xyz"
+        assert data[0]["runtime"] == "claude"
+        assert data[0]["state"] == "dead"
+        assert data[0]["task_id"] == "-"
+
+    @patch("horse_fish.cli.Store")
+    def test_agents_duration_format(self, mock_store_class, runner):
+        """Duration is formatted as human-readable."""
+        mock_store = MagicMock()
+        mock_store.fetchall.return_value = [
+            {
+                "name": "hf-old",
+                "runtime": "pi",
+                "model": "qwen3.5-plus",
+                "state": "idle",
+                "task_id": None,
+                "started_at": None,
+            },
+        ]
+        mock_store_class.return_value = mock_store
+
+        result = runner.invoke(main, ["agents"])
+        assert result.exit_code == 0
+        assert "N/A" in result.output
+
+    @patch("horse_fish.cli.Store")
+    def test_agents_invalid_state(self, mock_store_class, runner):
+        """Invalid --state value is rejected by Click."""
+        mock_store = MagicMock()
+        mock_store_class.return_value = mock_store
+
+        result = runner.invoke(main, ["agents", "--state", "invalid"])
+        assert result.exit_code != 0
+
+
 class TestDashRecord:
     """Tests for hf dash --record flag."""
 

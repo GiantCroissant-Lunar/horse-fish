@@ -133,16 +133,33 @@ class ValidationGates:
         return proc.returncode == 0, output
 
     async def auto_fix(self, worktree_path: str | Path) -> GateResult:
-        """Run ruff check --fix and ruff format to auto-fix lint issues.
+        """Run ruff format then ruff check --fix to auto-fix lint issues.
 
-        Returns GateResult with gate='auto-fix'. If ruff check --fix exits
-        non-zero (unfixable errors remain), returns passed=False immediately.
+        Always runs both tools: ruff format first (fixes E501 line length),
+        then ruff check --fix (fixes auto-fixable rule violations).
+        Re-runs ruff check at the end to determine if unfixable errors remain.
         """
         worktree_path = Path(worktree_path)
         start = time.monotonic()
+        output_parts: list[str] = []
 
         try:
-            # Run ruff check --fix
+            # Run ruff format FIRST — this fixes E501 (line length) which --fix cannot
+            proc = await asyncio.create_subprocess_exec(
+                "ruff",
+                "format",
+                "src/",
+                "tests/",
+                cwd=str(worktree_path),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+            fmt_out = stdout.decode().strip() or stderr.decode().strip()
+            if fmt_out:
+                output_parts.append(fmt_out)
+
+            # Run ruff check --fix to auto-fix remaining rule violations
             proc = await asyncio.create_subprocess_exec(
                 "ruff",
                 "check",
@@ -154,16 +171,14 @@ class ValidationGates:
                 stderr=asyncio.subprocess.PIPE,
             )
             stdout, stderr = await proc.communicate()
-            check_output = stdout.decode().strip() or stderr.decode().strip()
+            fix_out = stdout.decode().strip() or stderr.decode().strip()
+            if fix_out:
+                output_parts.append(fix_out)
 
-            if proc.returncode != 0:
-                duration = time.monotonic() - start
-                return GateResult(gate="auto-fix", passed=False, output=check_output, duration_seconds=duration)
-
-            # Run ruff format
+            # Re-check to see if unfixable errors remain
             proc = await asyncio.create_subprocess_exec(
                 "ruff",
-                "format",
+                "check",
                 "src/",
                 "tests/",
                 cwd=str(worktree_path),
@@ -171,11 +186,24 @@ class ValidationGates:
                 stderr=asyncio.subprocess.PIPE,
             )
             stdout, stderr = await proc.communicate()
-            format_output = stdout.decode().strip() or stderr.decode().strip()
+            recheck_out = stdout.decode().strip() or stderr.decode().strip()
 
             duration = time.monotonic() - start
-            combined = "\n".join(filter(None, [check_output, format_output]))
-            return GateResult(gate="auto-fix", passed=True, output=combined, duration_seconds=duration)
+            if proc.returncode != 0:
+                output_parts.append(recheck_out)
+                return GateResult(
+                    gate="auto-fix",
+                    passed=False,
+                    output="\n".join(filter(None, output_parts)),
+                    duration_seconds=duration,
+                )
+
+            return GateResult(
+                gate="auto-fix",
+                passed=True,
+                output="\n".join(filter(None, output_parts)),
+                duration_seconds=duration,
+            )
         except Exception as exc:
             duration = time.monotonic() - start
             return GateResult(gate="auto-fix", passed=False, output=f"auto-fix error: {exc}", duration_seconds=duration)

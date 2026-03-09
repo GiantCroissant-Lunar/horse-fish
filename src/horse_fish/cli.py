@@ -109,6 +109,81 @@ def status():
         store.close()
 
 
+@main.command()
+@click.option(
+    "--state",
+    "state_filter",
+    default=None,
+    type=click.Choice(["idle", "busy", "dead"]),
+    help="Filter by agent state",
+)
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def agents(state_filter: str | None, as_json: bool):
+    """List all agents from the store."""
+    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+    store = Store(DB_PATH)
+    store.migrate()
+
+    try:
+        if state_filter:
+            rows = store.fetchall(
+                "SELECT name, runtime, model, state, task_id, started_at"
+                " FROM agents WHERE state = ? ORDER BY started_at DESC",
+                (state_filter,),
+            )
+        else:
+            rows = store.fetchall(
+                "SELECT name, runtime, model, state, task_id, started_at FROM agents ORDER BY started_at DESC",
+            )
+
+        if not rows:
+            click.echo("No agents found.")
+            return
+
+        now = datetime.now(UTC)
+        results = []
+        for row in rows:
+            started_at = row.get("started_at")
+            duration_str = "N/A"
+            if started_at:
+                try:
+                    started = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+                    secs = int((now - started).total_seconds())
+                    if secs < 60:
+                        duration_str = f"{secs}s"
+                    elif secs < 3600:
+                        duration_str = f"{secs // 60}m {secs % 60}s"
+                    else:
+                        duration_str = f"{secs // 3600}h {(secs % 3600) // 60}m"
+                except (ValueError, AttributeError):
+                    pass
+
+            results.append(
+                {
+                    "name": row["name"],
+                    "runtime": row["runtime"],
+                    "model": row["model"] or "-",
+                    "state": row["state"],
+                    "task_id": row["task_id"] or "-",
+                    "duration": duration_str,
+                }
+            )
+
+        if as_json:
+            click.echo(json.dumps(results, indent=2))
+            return
+
+        click.echo(f"{'Name':<20} {'Runtime':<10} {'Model':<16} {'State':<8} {'Task ID':<20} {'Duration'}")
+        click.echo("-" * 95)
+        for r in results:
+            click.echo(
+                f"{r['name']:<20} {r['runtime']:<10} {r['model']:<16} "
+                f"{r['state']:<8} {r['task_id']:<20} {r['duration']}"
+            )
+    finally:
+        store.close()
+
+
 _ENV_KEYS = [
     ("DASHSCOPE_API_KEY", "Pi runtime, Cognee fallback LLM", True),
     ("ZAI_API_KEY", "Droid runtime (Z.AI/GLM)", False),

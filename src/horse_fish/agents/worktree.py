@@ -131,9 +131,10 @@ class WorktreeManager:
         # Auto-commit uncommitted changes if requested
         if auto_commit:
             try:
+                # Use --all to capture new (untracked) files and deletions
                 await self._run_git(
                     "add",
-                    ".",
+                    "--all",
                     cwd=path,
                 )
                 await self._run_git(

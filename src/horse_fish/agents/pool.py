@@ -99,7 +99,9 @@ class AgentPool:
                 branch=slot.branch or "",
                 project_context=self._project_context,
             )
-        await self._tmux.send_keys(slot.tmux_session, full_prompt)
+        # Claude Code needs a longer delay between paste and Enter for large prompts
+        enter_delay = 0.5 if slot.runtime == "claude" else 0.1
+        await self._tmux.send_keys(slot.tmux_session, full_prompt, enter_delay=enter_delay)
         self._store.execute(
             "UPDATE agents SET state = ?, task_id = ? WHERE id = ?",
             (AgentState.busy, task_id, agent_id),

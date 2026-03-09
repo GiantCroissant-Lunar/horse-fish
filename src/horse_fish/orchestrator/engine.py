@@ -445,8 +445,13 @@ class Orchestrator:
                 self._persist_subtask(subtask, run.id)
                 all_passed = False
 
+            except KeyError as exc:
+                logger.error("Review failed for subtask %s — agent slot not found: %s", subtask.id, exc)
+                subtask.state = SubtaskState.failed
+                self._persist_subtask(subtask, run.id)
+                all_passed = False
             except Exception as exc:
-                logger.error("Review failed for subtask %s: %s", subtask.id, exc)
+                logger.error("Review failed for subtask %s: %s", subtask.id, exc, exc_info=True)
                 subtask.state = SubtaskState.failed
                 self._persist_subtask(subtask, run.id)
                 all_passed = False
