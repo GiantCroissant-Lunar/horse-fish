@@ -10,6 +10,123 @@ import pytest
 from horse_fish.models import Run, Subtask, SubtaskResult
 
 
+class TestCogneeSearchType:
+    """Tests that search uses GRAPH_COMPLETION."""
+
+    @pytest.mark.asyncio
+    async def test_search_uses_graph_completion(self, tmp_path):
+        from horse_fish.memory.cognee_store import CogneeMemory
+
+        mem = CogneeMemory(data_dir=tmp_path / "cognee")
+
+        with patch("horse_fish.memory.cognee_store.cognee") as mock_cognee:
+            mock_cognee.search = AsyncMock(return_value=[])
+            mock_cognee.config = MagicMock()
+            # Mock SearchType import
+            mock_search_type = MagicMock()
+            with patch("horse_fish.memory.cognee_store.SearchType", mock_search_type):
+                await mem.search("test query")
+
+            # Verify GRAPH_COMPLETION was used
+            call_kwargs = mock_cognee.search.call_args
+            assert call_kwargs is not None
+            assert call_kwargs.kwargs.get("query_type") == mock_search_type.GRAPH_COMPLETION
+
+
+class TestCogneeDatasets:
+    """Tests that ingestion uses datasets and node_sets."""
+
+    @pytest.mark.asyncio
+    async def test_ingest_uses_dataset_name(self, tmp_path):
+        from horse_fish.memory.cognee_store import CogneeMemory
+
+        mem = CogneeMemory(data_dir=tmp_path / "cognee")
+
+        with patch("horse_fish.memory.cognee_store.cognee") as mock_cognee:
+            mock_cognee.add = AsyncMock()
+            mock_cognee.cognify = AsyncMock()
+            mock_cognee.config = MagicMock()
+
+            await mem.ingest("test content", {"type": "run_result"})
+
+            # Should pass dataset_name to cognee.add
+            call_args = mock_cognee.add.call_args
+            assert call_args.kwargs.get("dataset_name") == "general"
+
+    @pytest.mark.asyncio
+    async def test_ingest_uses_custom_dataset(self, tmp_path):
+        from horse_fish.memory.cognee_store import CogneeMemory
+
+        mem = CogneeMemory(data_dir=tmp_path / "cognee")
+
+        with patch("horse_fish.memory.cognee_store.cognee") as mock_cognee:
+            mock_cognee.add = AsyncMock()
+            mock_cognee.cognify = AsyncMock()
+            mock_cognee.config = MagicMock()
+
+            await mem.ingest("test content", {"dataset": "custom_ds"})
+
+            call_args = mock_cognee.add.call_args
+            assert call_args.kwargs.get("dataset_name") == "custom_ds"
+
+
+class TestCogneeTemporalCognify:
+    """Tests that cognify uses temporal mode."""
+
+    @pytest.mark.asyncio
+    async def test_cognify_uses_temporal(self, tmp_path):
+        from horse_fish.memory.cognee_store import CogneeMemory
+
+        mem = CogneeMemory(data_dir=tmp_path / "cognee")
+
+        with patch("horse_fish.memory.cognee_store.cognee") as mock_cognee:
+            mock_cognee.add = AsyncMock()
+            mock_cognee.cognify = AsyncMock()
+            mock_cognee.config = MagicMock()
+
+            await mem.ingest("test content")
+
+            call_kwargs = mock_cognee.cognify.call_args
+            assert call_kwargs.kwargs.get("temporal_cognify") is True
+
+
+class TestCogneeStructuredIngestion:
+    """Tests for structured run result ingestion."""
+
+    @pytest.mark.asyncio
+    async def test_ingest_run_result_uses_node_sets(self, tmp_path):
+        from horse_fish.memory.cognee_store import CogneeMemory
+
+        mem = CogneeMemory(data_dir=tmp_path / "cognee")
+        run = Run.create(task="Fix auth bug")
+        run.state = "completed"
+        results = [
+            SubtaskResult(
+                subtask_id="st-1",
+                success=True,
+                output="Fixed null check",
+                diff="diff --git ...",
+                duration_seconds=30.0,
+            ),
+        ]
+
+        with patch("horse_fish.memory.cognee_store.cognee") as mock_cognee:
+            mock_cognee.add = AsyncMock()
+            mock_cognee.cognify = AsyncMock()
+            mock_cognee.config = MagicMock()
+
+            await mem.ingest_run_result(run, results)
+
+            # Should call add multiple times with different node_sets
+            assert mock_cognee.add.await_count >= 3
+            # Check for task_summaries node_set
+            calls = mock_cognee.add.call_args_list
+            node_sets = [call.kwargs.get("node_set") for call in calls]
+            assert ["task_summaries"] in node_sets
+            assert ["subtask_outcomes"] in node_sets
+            assert ["code_diffs"] in node_sets
+
+
 class TestCogneeMemoryInit:
     """Tests for CogneeMemory initialization and config."""
 
@@ -50,7 +167,7 @@ class TestCogneeMemoryIngest:
             mock_cognee.cognify.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_ingest_run_result_formats_content(self, tmp_path):
+    async def test_ingest_run_result_structured_content(self, tmp_path):
         from horse_fish.memory.cognee_store import CogneeMemory
 
         mem = CogneeMemory(data_dir=tmp_path / "cognee")
@@ -77,11 +194,24 @@ class TestCogneeMemoryIngest:
 
             await mem.ingest_run_result(run, results)
 
-            # Should call add with formatted text
-            call_args = mock_cognee.add.call_args
-            text = call_args[0][0]
-            assert "Fix the login bug" in text
-            assert "Fixed null check" in text
+            # Should call add multiple times with structured node_sets
+            calls = mock_cognee.add.call_args_list
+            assert len(calls) >= 3  # task summary + subtask + diff
+
+            # Check task summary contains task name
+            task_summary_call = calls[0]
+            assert "Fix the login bug" in task_summary_call.args[0]
+            assert task_summary_call.kwargs.get("node_set") == ["task_summaries"]
+
+            # Check subtask outcome
+            subtask_call = calls[1]
+            assert "Fixed null check" in subtask_call.args[0]
+            assert subtask_call.kwargs.get("node_set") == ["subtask_outcomes"]
+
+            # Check diff
+            diff_call = calls[2]
+            assert "diff --git" in diff_call.args[0]
+            assert diff_call.kwargs.get("node_set") == ["code_diffs"]
 
 
 class TestCogneeMemorySearch:
