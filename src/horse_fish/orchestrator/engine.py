@@ -374,6 +374,18 @@ class Orchestrator:
             except Exception as exc:
                 logger.warning("Failed to store run entries for Cognee ingestion: %s", exc)
 
+        # Tier 3: Auto-organize into Cognee if available
+        if self._cognee_memory and self._memory:
+            try:
+                uningested = self._memory.get_uningested()
+                if uningested:
+                    count = await self._cognee_memory.batch_ingest(uningested)
+                    if count > 0:
+                        self._memory.mark_ingested([e.id for e in uningested])
+                    logger.info("Auto-organized %d entries into Cognee", count)
+            except Exception as exc:
+                logger.warning("Auto-organize into Cognee failed: %s", exc)
+
         # Lessons (deterministic pattern extraction)
         if self._lesson_store:
             try:

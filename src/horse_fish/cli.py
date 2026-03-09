@@ -8,25 +8,37 @@ import os
 from datetime import UTC, datetime
 from pathlib import Path
 
-import click
-from dotenv import load_dotenv
+# Suppress Cognee's noisy structlog output before any import that chains to cognee.
+# Cognee reads LOG_LEVEL env var at import time via cognee.shared.logging_utils.
+_orig_log_level = os.environ.get("LOG_LEVEL")
+if "LOG_LEVEL" not in os.environ:
+    os.environ["LOG_LEVEL"] = "ERROR"
 
-from horse_fish.agents.pool import AgentPool
-from horse_fish.agents.tmux import TmuxManager
-from horse_fish.agents.worktree import WorktreeManager
-from horse_fish.memory.lessons import LessonStore
-from horse_fish.memory.store import MemoryStore
-from horse_fish.merge.queue import MergeQueue
-from horse_fish.observability.traces import Tracer
-from horse_fish.orchestrator.engine import Orchestrator
-from horse_fish.planner.decompose import Planner
-from horse_fish.store.db import Store
-from horse_fish.validation.gates import ValidationGates
+import click  # noqa: E402
+from dotenv import load_dotenv  # noqa: E402
+
+from horse_fish.agents.pool import AgentPool  # noqa: E402
+from horse_fish.agents.tmux import TmuxManager  # noqa: E402
+from horse_fish.agents.worktree import WorktreeManager  # noqa: E402
+from horse_fish.memory.lessons import LessonStore  # noqa: E402
+from horse_fish.memory.store import MemoryStore  # noqa: E402
+from horse_fish.merge.queue import MergeQueue  # noqa: E402
+from horse_fish.observability.traces import Tracer  # noqa: E402
+from horse_fish.orchestrator.engine import Orchestrator  # noqa: E402
+from horse_fish.planner.decompose import Planner  # noqa: E402
+from horse_fish.store.db import Store  # noqa: E402
+from horse_fish.validation.gates import ValidationGates  # noqa: E402
 
 try:
-    from horse_fish.memory.cognee_store import CogneeMemory
+    from horse_fish.memory.cognee_store import CogneeMemory  # noqa: E402
 except ImportError:
     CogneeMemory = None  # type: ignore[assignment,misc]
+
+# Restore original LOG_LEVEL so runtime Cognee operations log normally
+if _orig_log_level is not None:
+    os.environ["LOG_LEVEL"] = _orig_log_level
+elif "LOG_LEVEL" in os.environ:
+    del os.environ["LOG_LEVEL"]
 
 load_dotenv()
 
