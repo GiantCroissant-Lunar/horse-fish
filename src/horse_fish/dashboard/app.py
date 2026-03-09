@@ -58,9 +58,20 @@ class DashApp(App):
     }
     """
 
-    def __init__(self, db_path: str) -> None:
+    def __init__(
+        self,
+        db_path: str,
+        max_concurrent_runs: int = 2,
+        runtime: str = "claude",
+        model: str | None = None,
+        max_agents: int = 3,
+    ) -> None:
         super().__init__()
         self._db_path = db_path
+        self._max_concurrent_runs = max_concurrent_runs
+        self._runtime = runtime
+        self._model = model
+        self._max_agents = max_agents
         self._store: Store | None = None
         self._tmux = TmuxManager()
 
