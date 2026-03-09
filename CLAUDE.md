@@ -56,6 +56,7 @@ src/horse_fish/
 | Pi | `pi` | kimi-for-coding | Free tier, good for bulk work |
 | OpenCode | `opencode` | qwen3.5-plus | Free tier (Alibaba), fast |
 | Kimi | `kimi` | kimi-for-coding | Free tier (Moonshot), strong coding |
+| Droid | `droid` | glm-4.7 | Z.AI GLM model, fast and cheap |
 
 ## Commands
 

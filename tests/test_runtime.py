@@ -9,6 +9,7 @@ from horse_fish.agents.runtime import (
     BashRuntime,
     ClaudeRuntime,
     CopilotRuntime,
+    DroidRuntime,
     KimiRuntime,
     OpenCodeRuntime,
     PiRuntime,
@@ -164,3 +165,39 @@ class TestKimiRuntime:
     def test_kimi_in_runtime_registry(self) -> None:
         assert "kimi" in RUNTIME_REGISTRY
         assert isinstance(RUNTIME_REGISTRY["kimi"], KimiRuntime)
+
+
+class TestDroidRuntime:
+    """Tests for DroidRuntime adapter."""
+
+    def test_droid_spawn_command(self) -> None:
+        runtime = DroidRuntime()
+        command = runtime.build_spawn_command("glm-4.7")
+        assert command == "droid"
+
+    def test_droid_spawn_command_no_model(self) -> None:
+        runtime = DroidRuntime()
+        command = runtime.build_spawn_command("")
+        assert command == "droid"
+
+    def test_droid_build_env_passes_zai_key(self) -> None:
+        with patch.dict(os.environ, {"ZAI_API_KEY": "test-zai-key"}):  # pragma: allowlist secret
+            runtime = DroidRuntime()
+            env = runtime.build_env()
+            assert env["ZAI_API_KEY"] == "test-zai-key"  # pragma: allowlist secret
+
+    def test_droid_build_env_empty_when_no_key(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            runtime = DroidRuntime()
+            env = runtime.build_env()
+            assert env == {}
+
+    def test_droid_ready_pattern(self) -> None:
+        pattern = re.compile(DroidRuntime.ready_pattern)
+        assert pattern.search("❯ ")
+        assert pattern.search("Welcome to droid")
+        assert pattern.search("> ")
+
+    def test_droid_in_runtime_registry(self) -> None:
+        assert "droid" in RUNTIME_REGISTRY
+        assert isinstance(RUNTIME_REGISTRY["droid"], DroidRuntime)

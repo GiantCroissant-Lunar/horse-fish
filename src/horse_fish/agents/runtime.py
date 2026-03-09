@@ -125,6 +125,27 @@ class KimiRuntime:
 
 
 @dataclass(slots=True)
+class DroidRuntime:
+    """Adapter for the Factory AI Droid CLI (GLM-4.7 via Z.AI)."""
+
+    runtime_id: ClassVar[str] = "droid"
+    ready_pattern: ClassVar[str] = r"❯|>\s*$|droid"
+    ready_timeout_seconds: ClassVar[int] = 45
+
+    def build_spawn_command(self, model: str) -> str:
+        # Interactive mode — model is pre-configured in ~/.factory/settings.json
+        # The /model command switches models inside the session
+        return "droid"
+
+    def build_env(self) -> dict[str, str]:
+        api_key = os.environ.get("ZAI_API_KEY") or _get_tmux_env("ZAI_API_KEY")
+        env: dict[str, str] = {}
+        if api_key:
+            env["ZAI_API_KEY"] = api_key
+        return env
+
+
+@dataclass(slots=True)
 class BashRuntime:
     """Adapter for plain bash shell — used in testing."""
 
@@ -145,5 +166,6 @@ RUNTIME_REGISTRY: dict[str, RuntimeAdapter] = {
     PiRuntime.runtime_id: PiRuntime(),
     OpenCodeRuntime.runtime_id: OpenCodeRuntime(),
     KimiRuntime.runtime_id: KimiRuntime(),
+    DroidRuntime.runtime_id: DroidRuntime(),
     BashRuntime.runtime_id: BashRuntime(),
 }

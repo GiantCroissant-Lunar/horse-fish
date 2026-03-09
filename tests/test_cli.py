@@ -323,3 +323,34 @@ def test_logs_no_sessions(mock_tmux_class, runner):
     assert "No active" in result.output
     assert "horse-fish agents" in result.output
     mock_tmux.list_sessions.assert_called_once()
+
+
+class TestDashRecord:
+    """Tests for hf dash --record flag."""
+
+    def test_dash_record_no_asciinema(self, runner):
+        """--record shows error when asciinema is not installed."""
+        with patch("shutil.which", return_value=None):
+            result = runner.invoke(main, ["dash", "--record"])
+            assert "asciinema not found" in result.output
+
+    @patch("os.execvp")
+    @patch("shutil.which", return_value="/usr/bin/asciinema")
+    def test_dash_record_calls_execvp(self, _mock_which, mock_execvp, runner, tmp_path):
+        """--record calls os.execvp with asciinema."""
+        with patch("pathlib.Path.mkdir"):
+            runner.invoke(main, ["dash", "--record"])
+            mock_execvp.assert_called_once()
+            args = mock_execvp.call_args
+            assert args[0][0] == "asciinema"
+            assert "rec" in args[0][1]
+            assert "--command" in args[0][1]
+            assert "hf dash" in args[0][1]
+
+    def test_dash_without_record(self, runner):
+        """dash without --record launches DashApp normally."""
+        with patch("horse_fish.dashboard.app.DashApp") as mock_app_class:
+            mock_app = MagicMock()
+            mock_app_class.return_value = mock_app
+            runner.invoke(main, ["dash"])
+            mock_app.run.assert_called_once()

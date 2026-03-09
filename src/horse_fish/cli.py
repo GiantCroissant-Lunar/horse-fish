@@ -191,15 +191,33 @@ def logs(agent, lines):
 
 
 @main.command()
-def dash():
+@click.option("--record", is_flag=True, help="Record session with asciinema")
+def dash(record: bool):
     """Live TUI dashboard (read-only)."""
     try:
         from horse_fish.dashboard.app import DashApp
     except ImportError:
         click.echo("Dashboard requires textual: pip install 'horse-fish[dashboard]'")
         return
-    app = DashApp(db_path=DB_PATH)
-    app.run()
+
+    if record:
+        import os
+        import shutil
+        from datetime import datetime
+
+        if not shutil.which("asciinema"):
+            click.echo("asciinema not found. Install with: brew install asciinema")
+            return
+
+        recordings_dir = Path("recordings")
+        recordings_dir.mkdir(exist_ok=True)
+        timestamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+        cast_file = recordings_dir / f"dash-{timestamp}.cast"
+        click.echo(f"Recording to {cast_file}")
+        os.execvp("asciinema", ["asciinema", "rec", "--command", "hf dash", str(cast_file)])
+    else:
+        app = DashApp(db_path=DB_PATH)
+        app.run()
 
 
 @main.command()

@@ -132,7 +132,7 @@ async def test_is_alive_checks_existing_sessions(monkeypatch: pytest.MonkeyPatch
 
 
 def test_runtime_registry_contains_supported_runtimes() -> None:
-    assert set(RUNTIME_REGISTRY) == {"claude", "copilot", "pi", "opencode", "kimi", "bash"}
+    assert set(RUNTIME_REGISTRY) == {"claude", "copilot", "pi", "opencode", "kimi", "droid", "bash"}
     assert RUNTIME_REGISTRY["claude"].build_spawn_command("sonnet") == "claude --model sonnet"
     assert RUNTIME_REGISTRY["copilot"].build_spawn_command("gpt-5.4") == "copilot --model gpt-5.4 --allow-all-tools"
     assert RUNTIME_REGISTRY["pi"].build_spawn_command("qwen3.5-plus") == "pi --provider dashscope --model qwen3.5-plus"
