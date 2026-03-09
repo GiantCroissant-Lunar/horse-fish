@@ -44,7 +44,7 @@ def test_run_command(mock_init_components, runner, mock_run):
     mock_pool = MagicMock()
     mock_init_components.return_value = (mock_orchestrator, mock_store, mock_pool)
 
-    result = runner.invoke(main, ["run", "test task"])
+    result = runner.invoke(main, ["run", "test task", "--foreground"])
 
     assert result.exit_code == 0
     assert f"Run {mock_run.id}: completed" in result.output
@@ -128,7 +128,7 @@ def test_run_with_options(mock_init_components, runner, mock_run):
 
     result = runner.invoke(
         main,
-        ["run", "custom task", "--runtime", "pi", "--model", "custom-model", "--max-agents", "5"],
+        ["run", "custom task", "--runtime", "pi", "--model", "custom-model", "--max-agents", "5", "--foreground"],
     )
 
     assert result.exit_code == 0
@@ -538,3 +538,172 @@ class TestEnvCheck:
         assert result.exit_code == 0
         # Key should show as masked (first 4 chars + "...")
         assert "from..." in result.output
+
+
+class TestRunForeground:
+    """Tests for hf run --foreground flag."""
+
+    @patch("horse_fish.cli._init_components")
+    def test_run_foreground_flag(self, mock_init_components, runner, mock_run):
+        """--foreground triggers blocking orchestrator run."""
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.run = AsyncMock(return_value=mock_run)
+        mock_store = MagicMock()
+        mock_store.close = MagicMock()
+        mock_pool = MagicMock()
+        mock_init_components.return_value = (mock_orchestrator, mock_store, mock_pool)
+
+        result = runner.invoke(main, ["run", "test task", "--foreground"])
+
+        assert result.exit_code == 0
+        assert f"Run {mock_run.id}: completed" in result.output
+        mock_init_components.assert_called_once()
+        mock_orchestrator.run.assert_called_once_with("test task")
+
+    @patch("horse_fish.orchestrator.run_manager.RunManager")
+    def test_run_default_queues(self, mock_run_manager_class, runner):
+        """Default hf run (no --foreground) queues the run."""
+        mock_manager = MagicMock()
+        mock_manager.submit = AsyncMock(return_value="12345678-1234-1234-1234-123456789012")
+        mock_run_manager_class.return_value = mock_manager
+
+        result = runner.invoke(main, ["run", "test task"])
+
+        assert result.exit_code == 0
+        assert "Queued run 12345678" in result.output
+        mock_run_manager_class.assert_called_once()
+        mock_manager.submit.assert_called_once_with("test task")
+
+
+class TestQueueCommand:
+    """Tests for hf queue command."""
+
+    @patch("horse_fish.cli.Store")
+    def test_queue_command_shows_runs(self, mock_store_class, runner):
+        """hf queue shows active, queued, and recent runs."""
+        mock_store = MagicMock()
+        mock_store.fetch_queued_runs.return_value = [
+            {
+                "id": "q1",
+                "task": "queued task",
+                "state": "queued",
+                "created_at": "2026-03-09T10:00:00Z",
+                "completed_at": None,
+            }
+        ]
+        mock_store.fetch_active_runs.return_value = [
+            {
+                "id": "a1",
+                "task": "active task",
+                "state": "executing",
+                "created_at": "2026-03-09T09:00:00Z",
+                "completed_at": None,
+            }
+        ]
+        mock_store.fetchall.return_value = [
+            {
+                "id": "c1",
+                "task": "completed task",
+                "state": "completed",
+                "created_at": "2026-03-09T08:00:00Z",
+                "completed_at": "2026-03-09T08:30:00Z",
+            }
+        ]
+        mock_store_class.return_value = mock_store
+
+        result = runner.invoke(main, ["queue"])
+
+        assert result.exit_code == 0
+        assert "ID" in result.output
+        assert "State" in result.output
+        assert "Task" in result.output
+        assert "queued task" in result.output
+        assert "active task" in result.output
+        assert "completed task" in result.output
+        assert "1 active | 1 queued" in result.output
+
+    @patch("horse_fish.cli.Store")
+    def test_queue_command_no_runs(self, mock_store_class, runner):
+        """hf queue shows message when no runs found."""
+        mock_store = MagicMock()
+        mock_store.fetch_queued_runs.return_value = []
+        mock_store.fetch_active_runs.return_value = []
+        mock_store.fetchall.return_value = []
+        mock_store_class.return_value = mock_store
+
+        result = runner.invoke(main, ["queue"])
+
+        assert result.exit_code == 0
+        assert "No runs found" in result.output
+
+    @patch("horse_fish.cli.Store")
+    def test_queue_command_json_output(self, mock_store_class, runner):
+        """hf queue --json-output outputs JSON."""
+        mock_store = MagicMock()
+        mock_store.fetch_queued_runs.return_value = []
+        mock_store.fetch_active_runs.return_value = []
+        mock_store.fetchall.return_value = []
+        mock_store_class.return_value = mock_store
+
+        result = runner.invoke(main, ["queue", "--json-output"])
+
+        assert result.exit_code == 0
+        import json
+
+        data = json.loads(result.output)
+        assert data == []
+
+
+class TestCancelCommand:
+    """Tests for hf cancel command."""
+
+    @patch("horse_fish.orchestrator.run_manager.RunManager")
+    def test_cancel_command(self, mock_run_manager_class, runner):
+        """hf cancel cancels a queued run."""
+        mock_manager = MagicMock()
+        mock_manager.cancel = AsyncMock(return_value=True)
+        mock_run_manager_class.return_value = mock_manager
+
+        result = runner.invoke(main, ["cancel", "12345678-1234-1234-1234-123456789012"])
+
+        assert result.exit_code == 0
+        assert "Cancelled run 12345678" in result.output
+        mock_run_manager_class.assert_called_once()
+        mock_manager.cancel.assert_called_once_with("12345678-1234-1234-1234-123456789012")
+
+    @patch("horse_fish.orchestrator.run_manager.RunManager")
+    def test_cancel_nonexistent(self, mock_run_manager_class, runner):
+        """hf cancel shows error for nonexistent run."""
+        mock_manager = MagicMock()
+        mock_manager.cancel = AsyncMock(return_value=False)
+        mock_run_manager_class.return_value = mock_manager
+
+        result = runner.invoke(main, ["cancel", "nonexistent-id"])
+
+        assert result.exit_code == 0
+        assert "not found or already in terminal state" in result.output
+
+
+class TestDashWithRunManager:
+    """Tests for hf dash with RunManager integration."""
+
+    @patch("horse_fish.dashboard.app.DashApp")
+    def test_dash_with_options(self, mock_app_class, runner):
+        """dash with options passes them to DashApp."""
+        mock_app = MagicMock()
+        mock_app_class.return_value = mock_app
+
+        result = runner.invoke(
+            main,
+            ["dash", "--max-concurrent", "5", "--runtime", "pi", "--model", "custom-model", "--max-agents", "10"],
+        )
+
+        assert result.exit_code == 0
+        mock_app_class.assert_called_once_with(
+            db_path=".horse-fish/state.db",
+            max_concurrent_runs=5,
+            runtime="pi",
+            model="custom-model",
+            max_agents=10,
+        )
+        mock_app.run.assert_called_once()

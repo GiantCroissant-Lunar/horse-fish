@@ -93,16 +93,80 @@ def main():
 @click.option("--model", default=None, help="Model override")
 @click.option("--max-agents", default=3, type=int, help="Max concurrent agents")
 @click.option("--planner-runtime", default=None, help="Runtime for planning (defaults to --runtime)")
-def run(task: str, runtime: str, model: str | None, max_agents: int, planner_runtime: str | None):
+@click.option("--foreground", is_flag=True, help="Run in foreground (blocking)")
+def run(task: str, runtime: str, model: str | None, max_agents: int, planner_runtime: str | None, foreground: bool):
     """Submit a task to the swarm."""
-    orchestrator, store, _pool = _init_components(runtime, model, max_agents, planner_runtime)
+    if foreground:
+        # Blocking behavior — run orchestrator synchronously
+        orchestrator, store, _pool = _init_components(runtime, model, max_agents, planner_runtime)
+        try:
+            result = asyncio.run(orchestrator.run(task))
+            click.echo(f"Run {result.id}: {result.state}")
+            for subtask in result.subtasks:
+                click.echo(f"  [{subtask.state}] {subtask.description}")
+        finally:
+            store.close()
+    else:
+        # Non-blocking: insert queued run into SQLite, print ID, exit
+        from horse_fish.orchestrator.run_manager import RunManager
+
+        manager = RunManager(
+            db_path=DB_PATH, runtime=runtime, model=model, max_agents=max_agents, planner_runtime=planner_runtime
+        )
+        run_id = asyncio.run(manager.submit(task))
+        click.echo(f"Queued run {run_id[:8]}. Use 'hf dash' to monitor or 'hf run --foreground' for blocking mode.")
+
+
+@main.command()
+@click.option("--json-output", "as_json", is_flag=True, help="Output as JSON")
+def queue(as_json: bool):
+    """Show run queue (pending + active runs)."""
+    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+    store = Store(DB_PATH)
+    store.migrate()
     try:
-        result = asyncio.run(orchestrator.run(task))
-        click.echo(f"Run {result.id}: {result.state}")
-        for subtask in result.subtasks:
-            click.echo(f"  [{subtask.state}] {subtask.description}")
+        queued = store.fetch_queued_runs(limit=50)
+        active = store.fetch_active_runs()
+        # Also fetch recent completed/failed for context
+        recent = store.fetchall(
+            "SELECT * FROM runs WHERE state IN ('completed', 'failed', 'cancelled') ORDER BY completed_at DESC LIMIT 5"
+        )
+
+        all_runs = active + queued + recent
+
+        if as_json:
+            click.echo(json.dumps(all_runs, indent=2, default=str))
+            return
+
+        if not all_runs:
+            click.echo("No runs found.")
+            return
+
+        click.echo(f"{'ID':<10} {'State':<12} {'Task':<40} {'Duration'}")
+        click.echo("-" * 75)
+        for r in all_runs:
+            rid = r["id"][:8]
+            task = (r["task"] or "")[:38]
+            duration = _format_duration(r["created_at"], r.get("completed_at"))
+            click.echo(f"{rid:<10} {r['state']:<12} {task:<40} {duration}")
+
+        click.echo(f"\n{len(active)} active | {len(queued)} queued")
     finally:
         store.close()
+
+
+@main.command()
+@click.argument("run_id", type=str)
+def cancel(run_id: str):
+    """Cancel a queued or running run."""
+    from horse_fish.orchestrator.run_manager import RunManager
+
+    manager = RunManager(db_path=DB_PATH)
+    cancelled = asyncio.run(manager.cancel(run_id))
+    if cancelled:
+        click.echo(f"Cancelled run {run_id[:8]}.")
+    else:
+        click.echo(f"Run '{run_id}' not found or already in terminal state.")
 
 
 @main.command()
@@ -454,8 +518,12 @@ def logs(agent, lines):
 
 @main.command()
 @click.option("--record", is_flag=True, help="Record session with asciinema")
-def dash(record: bool):
-    """Live TUI dashboard (read-only)."""
+@click.option("--max-concurrent", default=2, type=int, help="Max concurrent runs")
+@click.option("--runtime", default="claude", help="Default runtime")
+@click.option("--model", default=None, help="Model override")
+@click.option("--max-agents", default=3, type=int, help="Max agents per run")
+def dash(record: bool, max_concurrent: int, runtime: str, model: str | None, max_agents: int):
+    """Live TUI dashboard with run manager."""
     try:
         from horse_fish.dashboard.app import DashApp
     except ImportError:
@@ -478,7 +546,13 @@ def dash(record: bool):
         click.echo(f"Recording to {cast_file}")
         os.execvp("asciinema", ["asciinema", "rec", "--command", "hf dash", str(cast_file)])
     else:
-        app = DashApp(db_path=DB_PATH)
+        app = DashApp(
+            db_path=DB_PATH,
+            max_concurrent_runs=max_concurrent,
+            runtime=runtime,
+            model=model,
+            max_agents=max_agents,
+        )
         app.run()
 
 
