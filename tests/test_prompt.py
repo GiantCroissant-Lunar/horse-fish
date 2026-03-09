@@ -80,3 +80,14 @@ def test_build_fix_prompt_contains_gate_output():
     assert "/tmp/wt" in result
     assert "fix" in result.lower()
     assert "commit" in result.lower()
+
+
+def test_build_prompt_includes_memory_commands() -> None:
+    """Verify memory commands section appears in output."""
+    result = build_prompt(task="test", worktree_path="/tmp", branch="main")
+
+    assert "## Memory Commands" in result
+    assert "hf memory search" in result
+    assert "hf memory store" in result
+    assert "keywords about your task" in result
+    assert "description of what was built/learned" in result
