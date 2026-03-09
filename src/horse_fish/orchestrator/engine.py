@@ -76,6 +76,7 @@ class Orchestrator:
         self._stall_timeout = stall_timeout_seconds
         self._concurrency_limits = concurrency_limits or {}
         self._store = store
+        self._active_trace = None
 
         self._handlers: dict[RunState, _Handler] = {
             RunState.planning: self._plan,
@@ -132,6 +133,7 @@ class Orchestrator:
             if self._tracer
             else None
         )
+        self._active_trace = trace
 
         try:
             while run.state not in (RunState.completed, RunState.failed):
@@ -155,6 +157,25 @@ class Orchestrator:
             self._persist_run(run)
 
             if self._tracer and trace:
+                self._tracer.score_trace(
+                    trace,
+                    "run_success",
+                    1.0 if run.state == RunState.completed else 0.0,
+                    data_type="NUMERIC",
+                    metadata={"status": run.state.value},
+                )
+                self._tracer.score_trace(
+                    trace,
+                    "completed_subtasks",
+                    float(sum(1 for s in run.subtasks if s.state == SubtaskState.done)),
+                    data_type="NUMERIC",
+                )
+                self._tracer.score_trace(
+                    trace,
+                    "failed_subtasks",
+                    float(sum(1 for s in run.subtasks if s.state == SubtaskState.failed)),
+                    data_type="NUMERIC",
+                )
                 self._tracer.end_trace(
                     trace,
                     run.state.value,
@@ -165,6 +186,7 @@ class Orchestrator:
                         "failed_subtasks": sum(1 for s in run.subtasks if s.state == SubtaskState.failed),
                     },
                 )
+            self._active_trace = None
         if run.state == RunState.completed:
             await self._learn(run)
 
@@ -407,10 +429,15 @@ class Orchestrator:
         """
         all_passed = True
         needs_re_execute = False
+        reviewed_subtasks = 0
+        passed_subtasks = 0
+        failed_subtasks = 0
+        retried_subtasks = 0
 
         for subtask in run.subtasks:
             if subtask.state != SubtaskState.done or not subtask.agent:
                 continue
+            reviewed_subtasks += 1
 
             try:
                 slot = self._pool._get_slot(subtask.agent)
@@ -424,6 +451,7 @@ class Orchestrator:
 
                 results = await self._gates.run_all(slot.worktree_path)
                 if self._gates.all_passed(results):
+                    passed_subtasks += 1
                     continue
 
                 # Gates failed — try retry
@@ -458,6 +486,7 @@ class Orchestrator:
                     subtask.last_activity_at = datetime.now(UTC)
                     self._persist_subtask(subtask, run.id)
                     needs_re_execute = True
+                    retried_subtasks += 1
                     logger.info(
                         "Sent fix prompt to agent for subtask %s (gate retry %d/%d)",
                         subtask.id,
@@ -470,6 +499,7 @@ class Orchestrator:
                 subtask.state = SubtaskState.failed
                 self._persist_subtask(subtask, run.id)
                 all_passed = False
+                failed_subtasks += 1
 
             except KeyError as exc:
                 logger.error("Review failed for subtask %s — agent slot not found: %s", subtask.id, exc)
@@ -481,6 +511,27 @@ class Orchestrator:
                 subtask.state = SubtaskState.failed
                 self._persist_subtask(subtask, run.id)
                 all_passed = False
+                failed_subtasks += 1
+
+        if self._tracer and self._active_trace and reviewed_subtasks:
+            self._tracer.score_trace(
+                self._active_trace,
+                "review_gate_pass_rate",
+                passed_subtasks / reviewed_subtasks,
+                data_type="NUMERIC",
+                metadata={
+                    "reviewed_subtasks": reviewed_subtasks,
+                    "passed_subtasks": passed_subtasks,
+                    "failed_subtasks": failed_subtasks,
+                    "retried_subtasks": retried_subtasks,
+                },
+            )
+            self._tracer.score_trace(
+                self._active_trace,
+                "review_status",
+                "retry" if needs_re_execute else ("pass" if all_passed else "fail"),
+                data_type="CATEGORICAL",
+            )
 
         if needs_re_execute:
             run.state = RunState.executing

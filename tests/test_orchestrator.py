@@ -1092,6 +1092,67 @@ async def test_run_does_not_store_memory_on_failure(mock_pool, mock_planner, moc
     mock_memory.store_run_result.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_run_scores_trace_outcomes(mock_pool, mock_planner, mock_gates):
+    """run() should record Langfuse scores for overall outcome."""
+    mock_planner.decompose.return_value = [Subtask(id="subtask-1", description="Task 1")]
+    slot = AgentSlot(
+        id="agent-1",
+        name="hf-subtask-1",
+        runtime="claude",
+        model="claude-sonnet-4.6",
+        capability="builder",
+        state=AgentState.busy,
+        worktree_path="/tmp/wt",
+    )
+    mock_pool.spawn.return_value = slot
+    mock_pool.send_task = AsyncMock()
+    mock_pool.check_status = AsyncMock(return_value=AgentState.dead)
+    mock_pool.collect_result = AsyncMock(
+        return_value=SubtaskResult(
+            subtask_id="subtask-1",
+            success=True,
+            output="Done",
+            diff="commit",
+            duration_seconds=10.0,
+        )
+    )
+    mock_pool._get_slot.return_value = slot
+    mock_gates.run_all = AsyncMock(
+        return_value=[GateResult(gate="compile", passed=True, output="ok", duration_seconds=1.0)]
+    )
+    mock_pool._worktrees.merge = AsyncMock(return_value=True)
+
+    mock_tracer = MagicMock()
+    mock_trace = MagicMock()
+    mock_trace.run_id = "run-1"
+    mock_trace.trace_id = "trace-1"
+    mock_trace.spans = []
+    mock_tracer.trace_run.return_value = mock_trace
+    mock_tracer.span.return_value = MagicMock()
+
+    orchestrator = Orchestrator(
+        pool=mock_pool,
+        planner=mock_planner,
+        gates=mock_gates,
+        runtime="claude",
+        tracer=mock_tracer,
+    )
+
+    async def mock_sleep(seconds):
+        return None
+
+    with pytest.MonkeyPatch().context() as m:
+        m.setattr("horse_fish.orchestrator.engine.asyncio.sleep", mock_sleep)
+        run = await orchestrator.run("Build system")
+
+    assert run.state == RunState.completed
+    score_names = [call.args[1] for call in mock_tracer.score_trace.call_args_list]
+    assert "run_success" in score_names
+    assert "completed_subtasks" in score_names
+    assert "review_gate_pass_rate" in score_names
+
+
 # --- Task 3: Stall Detection tests ---
 
 

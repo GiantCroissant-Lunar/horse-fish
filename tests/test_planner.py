@@ -113,6 +113,7 @@ async def test_decompose_emits_generation_trace():
     tracer = MagicMock()
     generation = MagicMock()
     tracer.generation.return_value = generation
+    tracer.get_prompt.return_value = None
     planner = Planner(runtime="claude", tracer=tracer)
     planner._run_cli = AsyncMock(return_value=json.dumps([{"description": "Task A"}]))
 
@@ -130,6 +131,7 @@ async def test_decompose_traces_generation_error():
     tracer = MagicMock()
     generation = MagicMock()
     tracer.generation.return_value = generation
+    tracer.get_prompt.return_value = None
     planner = Planner(runtime="claude", tracer=tracer)
     planner._run_cli = AsyncMock(side_effect=PlannerError("CLI failed"))
 
@@ -139,6 +141,25 @@ async def test_decompose_traces_generation_error():
     tracer.generation.assert_called_once()
     tracer.end_span.assert_called_once()
     assert tracer.end_span.call_args.kwargs["level"] == "ERROR"
+
+
+@pytest.mark.asyncio
+async def test_decompose_uses_langfuse_prompt_when_available():
+    tracer = MagicMock()
+    generation = MagicMock()
+    tracer.generation.return_value = generation
+    prompt_client = MagicMock()
+    prompt_client.compile.return_value = "Managed prompt"
+    prompt_client.version = 3
+    prompt_client.labels = ["production"]
+    tracer.get_prompt.return_value = prompt_client
+    planner = Planner(runtime="claude", tracer=tracer)
+    planner._run_cli = AsyncMock(return_value=json.dumps([{"description": "Task A"}]))
+
+    await planner.decompose("Add auth", "Django app")
+
+    prompt_client.compile.assert_called_once_with(task="Add auth", context="Django app")
+    assert tracer.generation.call_args.kwargs["prompt"] is prompt_client
 
 
 # ---------------------------------------------------------------------------

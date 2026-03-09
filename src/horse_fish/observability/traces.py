@@ -88,6 +88,16 @@ class Tracer:
         """Check if tracer is in no-op mode."""
         return self._client is None
 
+    def get_prompt(self, name: str, fallback: str) -> Any | None:
+        """Fetch a Langfuse-managed prompt, returning None on failure/no-op."""
+        if self._is_noop():
+            return None
+
+        try:
+            return self._client.get_prompt(name, type="text", fallback=fallback)
+        except Exception:
+            return None
+
     def trace_run(
         self,
         run_id: str,
@@ -274,5 +284,32 @@ class Tracer:
             if trace._root_context is not None:
                 trace._root_context.__exit__(None, None, None)
             self._client.flush()
+        except Exception:
+            pass
+
+    def score_trace(
+        self,
+        trace: RunTrace,
+        name: str,
+        value: float | str,
+        *,
+        data_type: str | None = None,
+        comment: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Create a score on the given trace."""
+        if self._is_noop() or trace.trace_id is None:
+            return
+
+        try:
+            self._client.create_score(
+                name=name,
+                value=value,
+                trace_id=trace.trace_id,
+                session_id=trace.run_id,
+                data_type=data_type,
+                comment=comment,
+                metadata=metadata,
+            )
         except Exception:
             pass

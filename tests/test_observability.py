@@ -245,6 +245,60 @@ def test_end_trace_flushes(mock_langfuse_cls: MagicMock) -> None:
     mock_client.flush.assert_called_once()
 
 
+@patch.dict(
+    os.environ,
+    {
+        "LANGFUSE_PUBLIC_KEY": "pk-test",
+        "LANGFUSE_SECRET_KEY": "sk-test",
+    },
+)
+@patch("langfuse.Langfuse")
+def test_get_prompt_uses_langfuse_client(mock_langfuse_cls: MagicMock) -> None:
+    """get_prompt should delegate to the Langfuse client."""
+    mock_client = MagicMock()
+    mock_prompt = MagicMock()
+    mock_client.get_prompt.return_value = mock_prompt
+    mock_langfuse_cls.return_value = mock_client
+
+    tracer = Tracer(enabled=True)
+    prompt = tracer.get_prompt("planner-decompose", fallback="Task: {{task}}")
+
+    assert prompt is mock_prompt
+    mock_client.get_prompt.assert_called_once_with("planner-decompose", type="text", fallback="Task: {{task}}")
+
+
+@patch.dict(
+    os.environ,
+    {
+        "LANGFUSE_PUBLIC_KEY": "pk-test",
+        "LANGFUSE_SECRET_KEY": "sk-test",
+    },
+)
+@patch("langfuse.Langfuse")
+def test_score_trace_uses_create_score(mock_langfuse_cls: MagicMock) -> None:
+    """score_trace should create a score linked to the trace."""
+    mock_client = MagicMock()
+    mock_root = MagicMock()
+    mock_root.id = "root-score"
+    mock_root.trace_id = "trace-score"
+    mock_client.start_as_current_span.return_value = make_mock_context(mock_root)
+    mock_langfuse_cls.return_value = mock_client
+
+    tracer = Tracer(enabled=True)
+    trace = tracer.trace_run("run-score", "score test")
+    tracer.score_trace(trace, "run_success", 1.0, data_type="NUMERIC", metadata={"status": "completed"})
+
+    mock_client.create_score.assert_called_once_with(
+        name="run_success",
+        value=1.0,
+        trace_id="trace-score",
+        session_id="run-score",
+        data_type="NUMERIC",
+        comment=None,
+        metadata={"status": "completed"},
+    )
+
+
 def test_end_span_idempotent() -> None:
     """end_span should be safe to call multiple times."""
     tracer = Tracer(enabled=False)
