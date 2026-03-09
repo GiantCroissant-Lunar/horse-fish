@@ -202,7 +202,10 @@ class Orchestrator:
                 continue
 
             elapsed = (now - subtask.last_activity_at).total_seconds()
-            if elapsed < self._stall_timeout:
+            # Gate-retried subtasks get double the stall timeout since the respawned
+            # agent needs time to start up, read the fix prompt, and run gates.
+            timeout = self._stall_timeout * 2 if subtask.gate_retry_count > 0 else self._stall_timeout
+            if elapsed < timeout:
                 continue
 
             logger.warning("Subtask %s stalled (%.0fs since last activity)", subtask.id, elapsed)
