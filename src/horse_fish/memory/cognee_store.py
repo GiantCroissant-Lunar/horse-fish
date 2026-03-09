@@ -19,6 +19,11 @@ try:
 except Exception:
     cognee = None  # type: ignore[assignment]
 
+try:
+    from cognee.api.v1.search import SearchType
+except Exception:
+    SearchType = None  # type: ignore[assignment]
+
 
 class CogneeHit(BaseModel):
     """A search result from Cognee knowledge graph."""
@@ -146,56 +151,122 @@ class CogneeMemory:
 
         Calls cognee.add() then cognee.cognify(). If cognify fails with
         primary LLM, retries with fallback LLM.
+
+        Uses dataset_name from metadata (default: "general") and
+        temporal_cognify=True for time-aware graph construction.
         """
         self._ensure_configured()
 
-        await cognee.add(content)
+        dataset = (metadata or {}).get("dataset", "general")
+        await cognee.add(content, dataset_name=dataset)
 
         try:
-            await cognee.cognify()
+            await cognee.cognify(datasets=[dataset], temporal_cognify=True)
         except Exception as exc:
             logger.warning("cognify failed with primary LLM: %s — trying fallback", exc)
             self._configure(use_fallback=True)
-            await cognee.cognify()
+            await cognee.cognify(datasets=[dataset], temporal_cognify=True)
 
     async def search(self, query: str, top_k: int = 5) -> list[CogneeHit]:
-        """Search the Cognee knowledge graph."""
+        """Search the Cognee knowledge graph using GRAPH_COMPLETION."""
         self._ensure_configured()
 
-        results = await cognee.search(query_text=query)
+        search_type = SearchType.GRAPH_COMPLETION if SearchType else None
+        kwargs: dict[str, Any] = {"query_text": query}
+        if search_type:
+            kwargs["query_type"] = search_type
+
+        results = await cognee.search(**kwargs)
 
         hits: list[CogneeHit] = []
         for result in results[:top_k]:
-            hits.append(
-                CogneeHit(
-                    node_id=getattr(result, "id", ""),
-                    content=getattr(result, "text", str(result)),
-                    score=getattr(result, "score", 0.0),
-                    metadata=getattr(result, "metadata", {}),
+            # GRAPH_COMPLETION returns different structures — handle all formats
+            if isinstance(result, str):
+                hits.append(CogneeHit(node_id="", content=result, score=1.0, metadata={}))
+            elif isinstance(result, dict):
+                hits.append(
+                    CogneeHit(
+                        node_id=result.get("id", ""),
+                        content=result.get("text", result.get("content", str(result))),
+                        score=result.get("score", 1.0),
+                        metadata=result.get("metadata", {}),
+                    )
                 )
-            )
+            else:
+                hits.append(
+                    CogneeHit(
+                        node_id=getattr(result, "id", ""),
+                        content=getattr(result, "text", getattr(result, "content", str(result))),
+                        score=getattr(result, "score", 1.0),
+                        metadata=getattr(result, "metadata", {}),
+                    )
+                )
         return hits
 
     async def ingest_run_result(self, run: Run, subtask_results: list[SubtaskResult]) -> None:
-        """Ingest a completed run into the knowledge graph."""
-        parts = [
-            f"Task: {run.task}",
-            f"State: {run.state}",
-            f"Subtasks: {len(run.subtasks)}",
-            "",
-        ]
+        """Ingest a completed run into the knowledge graph using structured node_sets.
 
+        Ingests: (1) task summary to task_summaries node_set, (2) subtask outcomes
+        to subtask_outcomes node_set, (3) code diffs to code_diffs node_set.
+        All go into the "run_results" dataset.
+        """
+        self._ensure_configured()
+
+        # 1. Ingest task summary
+        task_summary = f"Task: {run.task}\nState: {run.state}\nSubtasks: {len(run.subtasks)}"
+        await cognee.add(task_summary, dataset_name="run_results", node_set=["task_summaries"])
+
+        # 2. Ingest each subtask result separately
         for result in subtask_results:
-            parts.append(f"Subtask {result.subtask_id}:")
-            parts.append(f"  Success: {result.success}")
-            parts.append(f"  Output: {result.output}")
-            if result.diff:
-                parts.append(f"  Diff: {result.diff}")
-            parts.append("")
+            subtask_content = f"Subtask {result.subtask_id}:\n  Success: {result.success}\n  Output: {result.output}"
+            await cognee.add(subtask_content, dataset_name="run_results", node_set=["subtask_outcomes"])
 
-        content = "\n".join(parts)
-        await self.ingest(content, {"type": "run_result", "run_id": run.id})
+            # 3. Ingest diffs separately (code patterns)
+            if result.diff:
+                await cognee.add(result.diff, dataset_name="run_results", node_set=["code_diffs"])
+
+        # 4. Cognify all at once
+        try:
+            await cognee.cognify(datasets=["run_results"], temporal_cognify=True)
+        except Exception as exc:
+            logger.warning("cognify failed with primary LLM: %s — trying fallback", exc)
+            self._configure(use_fallback=True)
+            await cognee.cognify(datasets=["run_results"], temporal_cognify=True)
 
     async def find_similar_tasks(self, task_description: str, top_k: int = 3) -> list[CogneeHit]:
-        """Find past tasks similar to a new one via knowledge graph search."""
-        return await self.search(task_description, top_k=top_k)
+        """Find past tasks similar to a new one via knowledge graph search.
+
+        Searches only the "run_results" dataset for relevant past work.
+        """
+        self._ensure_configured()
+
+        search_type = SearchType.GRAPH_COMPLETION if SearchType else None
+        kwargs: dict[str, Any] = {"query_text": task_description, "datasets": ["run_results"]}
+        if search_type:
+            kwargs["query_type"] = search_type
+
+        results = await cognee.search(**kwargs)
+
+        hits: list[CogneeHit] = []
+        for result in results[:top_k]:
+            if isinstance(result, str):
+                hits.append(CogneeHit(node_id="", content=result, score=1.0, metadata={}))
+            elif isinstance(result, dict):
+                hits.append(
+                    CogneeHit(
+                        node_id=result.get("id", ""),
+                        content=result.get("text", result.get("content", str(result))),
+                        score=result.get("score", 1.0),
+                        metadata=result.get("metadata", {}),
+                    )
+                )
+            else:
+                hits.append(
+                    CogneeHit(
+                        node_id=getattr(result, "id", ""),
+                        content=getattr(result, "text", getattr(result, "content", str(result))),
+                        score=getattr(result, "score", 1.0),
+                        metadata=getattr(result, "metadata", {}),
+                    )
+                )
+        return hits
