@@ -25,6 +25,7 @@ class SubtaskState(StrEnum):
 
 class RunState(StrEnum):
     queued = "queued"
+    scouting = "scouting"
     planning = "planning"
     executing = "executing"
     reviewing = "reviewing"
@@ -70,12 +71,31 @@ class SubtaskResult(BaseModel):
     completed_at: datetime | None = None
 
 
+class FileContext(BaseModel):
+    """Context information about a single file relevant to a task."""
+
+    path: str
+    description: str
+    relevance_score: float = 1.0
+
+
+class ContextBrief(BaseModel):
+    """Context brief produced by scouting phase for enriched planning."""
+
+    project_type: str = ""
+    key_files: list[FileContext] = Field(default_factory=list)
+    conventions: list[str] = Field(default_factory=list)
+    dependencies: list[str] = Field(default_factory=list)
+    similar_patterns: list[str] = Field(default_factory=list)
+
+
 class Subtask(BaseModel):
     id: str
     description: str
     agent: str | None = None
     deps: list[str] = Field(default_factory=list)
     files_hint: list[str] = Field(default_factory=list)
+    acceptance_criteria: list[str] = Field(default_factory=list)
     state: SubtaskState = SubtaskState.pending
     result: SubtaskResult | None = None
     retry_count: int = 0
