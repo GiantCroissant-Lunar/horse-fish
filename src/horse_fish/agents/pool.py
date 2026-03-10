@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import re
 import signal
@@ -38,6 +39,7 @@ class AgentPool:
         self._seen_runtime_observations: dict[str, set[tuple[str, str, str]]] = {}
         self._active_task_contexts: dict[str, dict[str, Any]] = {}
         self._runtime_observation_stats: dict[str, dict[str, Any]] = {}
+        self._last_output_hash: dict[str, str] = {}  # agent_id → hash of last pane output
 
     def _trace_span(self, name: str, **metadata):
         """Create a best-effort span for agent lifecycle operations."""
@@ -446,6 +448,31 @@ class AgentPool:
                 )
             raise
 
+    async def check_heartbeat(self, agent_id: str) -> bool:
+        """Check if an agent's tmux pane output has changed since last check.
+
+        Returns True if the agent is producing new output (alive and working),
+        False if the output is unchanged (potentially stalled).
+        """
+        slot = self._get_slot(agent_id)
+        if slot.state == AgentState.dead:
+            return False
+
+        try:
+            output = await self._tmux.capture_pane(slot.tmux_session) or ""
+        except Exception:
+            return False
+
+        current_hash = hashlib.md5(output.encode(), usedforsecurity=False).hexdigest()
+        prev_hash = self._last_output_hash.get(agent_id)
+        self._last_output_hash[agent_id] = current_hash
+
+        # First check — no previous hash, so we can't compare
+        if prev_hash is None:
+            return True
+
+        return current_hash != prev_hash
+
     async def respawn(self, agent_id: str) -> AgentSlot:
         """Re-spawn a dead agent in its existing worktree with a fresh tmux session.
 
@@ -566,6 +593,7 @@ class AgentPool:
         self._store.execute("UPDATE agents SET state = ? WHERE id = ?", (AgentState.dead, agent_id))
         self._seen_runtime_observations.pop(agent_id, None)
         self._active_task_contexts.pop(agent_id, None)
+        self._last_output_hash.pop(agent_id, None)
 
     async def spawn_scout(self, runtime: str, model: str, repo_root: str, run_id: str | None = None) -> AgentSlot:
         """Spawn a scout agent in the canonical repo (no worktree).

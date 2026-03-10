@@ -759,6 +759,14 @@ class Orchestrator:
                         )
                     continue
 
+                # Check heartbeat — update last_activity_at if agent is producing output
+                try:
+                    heartbeat = await self._pool.check_heartbeat(agent_id)
+                    if heartbeat:
+                        subtask.last_activity_at = datetime.now(UTC)
+                except Exception:
+                    pass
+
                 # Check for new commits in worktree (primary completion signal)
                 try:
                     collect_span = self._subtask_span("subtask.poll_result", subtask, status=status.value)
