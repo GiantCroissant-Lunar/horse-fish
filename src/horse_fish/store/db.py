@@ -59,14 +59,6 @@ MIGRATIONS: list[tuple[int, str]] = [
         """,
     ),
     (
-        4,
-        """
-        -- Add run_id and pgid columns to agents table for process tracking
-        ALTER TABLE agents ADD COLUMN run_id TEXT;
-        ALTER TABLE agents ADD COLUMN pgid INTEGER;
-        """,
-    ),
-    (
         2,
         """
         CREATE TABLE IF NOT EXISTS lessons (
@@ -110,6 +102,14 @@ MIGRATIONS: list[tuple[int, str]] = [
             created_at TEXT NOT NULL DEFAULT '',
             FOREIGN KEY (run_id) REFERENCES runs(id)
         );
+        """,
+    ),
+    (
+        4,
+        """
+        -- Add run_id and pgid columns to agents table for process tracking
+        ALTER TABLE agents ADD COLUMN run_id TEXT;
+        ALTER TABLE agents ADD COLUMN pgid INTEGER;
         """,
     ),
 ]

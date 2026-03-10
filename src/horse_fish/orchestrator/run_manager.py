@@ -124,22 +124,51 @@ class RunManager:
         if state in {"completed", "failed", "cancelled"}:
             return False
 
+        run_id_full = run_data["id"]
+
         if state == "queued":
-            self._store.update_run_state(run_data["id"], "cancelled")
+            self._store.update_run_state(run_id_full, "cancelled")
             return True
 
-        # If active, cancel the asyncio.Task
-        if run_data["id"] in self._active_tasks:
-            task = self._active_tasks[run_data["id"]]
+        # If active, cancel the asyncio.Task and kill associated agents
+        if run_id_full in self._active_tasks:
+            task = self._active_tasks[run_id_full]
             task.cancel()
             try:
                 await task
             except asyncio.CancelledError:
                 pass
-            del self._active_tasks[run_data["id"]]
+            del self._active_tasks[run_id_full]
 
-        self._store.update_run_state(run_data["id"], "cancelled")
+        # Kill any spawned agent processes for this run
+        await self._kill_agents_for_run(run_id_full)
+
+        self._store.update_run_state(run_id_full, "cancelled")
         return True
+
+    async def _kill_agents_for_run(self, run_id: str) -> None:
+        """Kill all agents associated with a run."""
+        from horse_fish.agents.pool import AgentPool
+        from horse_fish.agents.tmux import TmuxManager
+        from horse_fish.agents.worktree import WorktreeManager
+
+        repo_root = str(Path.cwd())
+        tmux = TmuxManager()
+        worktrees = WorktreeManager(repo_root)
+        pool = AgentPool(self._store, tmux, worktrees)
+
+        try:
+            result = await pool.kill_agents_for_run(run_id)
+            if result["killed"] > 0 or result["timed_out"] > 0:
+                logger.info(
+                    "Killed %d agents for run %s (%d timed out, %d failed)",
+                    result["killed"],
+                    run_id[:8],
+                    result["timed_out"],
+                    result["failed"],
+                )
+        except Exception as exc:
+            logger.warning("Error killing agents for run %s: %s", run_id[:8], exc)
 
     async def start(self) -> None:
         """Main event loop. Polls for queued runs and dispatches up to max_concurrent."""

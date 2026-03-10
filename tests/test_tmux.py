@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -29,20 +30,25 @@ def fake_exec_factory(processes: list[FakeProcess], calls: list[tuple[tuple[obje
 
 
 @pytest.mark.asyncio
-async def test_spawn_starts_tmux_session_and_returns_pane_pid(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_spawn_starts_tmux_session_and_returns_spawn_result(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
     processes = [FakeProcess(), FakeProcess(stdout="4321\n")]
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec_factory(processes, calls))
 
     manager = TmuxManager()
-    pane_pid = await manager.spawn(
+
+    # Mock _get_pgid to return expected pgid
+    monkeypatch.setattr(manager, "_get_pgid", AsyncMock(return_value=4321))
+
+    result = await manager.spawn(
         name="agent-1",
         command="copilot --model gpt-5.4 --allow-all-tools",
         cwd="/tmp/worktree",
         env={"BETA": "two words", "ALPHA": "1"},
     )
 
-    assert pane_pid == 4321
+    assert result.pid == 4321
+    assert result.pgid == 4321
     assert calls[0][0] == (
         "tmux",
         "new-session",
@@ -66,7 +72,7 @@ async def test_spawn_raises_for_duplicate_session(monkeypatch: pytest.MonkeyPatc
 
     manager = TmuxManager()
 
-    with pytest.raises(RuntimeError, match="duplicate session"):
+    with pytest.raises(RuntimeError, match="failed to start tmux session"):
         await manager.spawn("agent-1", "claude", "/tmp/worktree")
 
 
