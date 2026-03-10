@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
+import signal
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -191,7 +193,7 @@ class AgentPool:
             "recent_observations": list(stats["recent_observations"]),
         }
 
-    async def spawn(self, name: str, runtime: str, model: str, capability: str) -> AgentSlot:
+    async def spawn(self, name: str, runtime: str, model: str, capability: str, run_id: str | None = None) -> AgentSlot:
         """Create a worktree, start a tmux session, persist the slot, and return it."""
         if runtime not in RUNTIME_REGISTRY:
             raise ValueError(f"unknown runtime {runtime!r}; available: {sorted(RUNTIME_REGISTRY)}")
@@ -202,6 +204,7 @@ class AgentPool:
             runtime=runtime,
             model=model,
             capability=capability,
+            run_id=run_id,
         )
         adapter = RUNTIME_REGISTRY[runtime]
         command = adapter.build_spawn_command(model)
@@ -211,7 +214,7 @@ class AgentPool:
             worktree = await self._worktrees.create(name)
             tmux_session = f"hf-{name}"
 
-            pid = await self._tmux.spawn(name=tmux_session, command=command, cwd=worktree.path, env=env)
+            spawn_result = await self._tmux.spawn(name=tmux_session, command=command, cwd=worktree.path, env=env)
 
             slot = AgentSlot(
                 id=str(uuid.uuid4()),
@@ -220,10 +223,12 @@ class AgentPool:
                 model=model,
                 capability=capability,
                 state=AgentState.idle,
-                pid=pid,
+                pid=spawn_result.pid,
+                pgid=spawn_result.pgid,
                 tmux_session=tmux_session,
                 worktree_path=worktree.path,
                 branch=worktree.branch,
+                run_id=run_id,
                 started_at=datetime.now(UTC),
             )
 
@@ -233,9 +238,9 @@ class AgentPool:
             self._store.execute(
                 """
                 INSERT INTO agents
-                    (id, name, runtime, model, capability, state, pid,
-                     tmux_session, worktree_path, branch, task_id, started_at, idle_since)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (id, name, runtime, model, capability, state, pid, pgid,
+                     tmux_session, worktree_path, branch, task_id, run_id, started_at, idle_since)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     slot.id,
@@ -245,10 +250,12 @@ class AgentPool:
                     slot.capability,
                     slot.state,
                     slot.pid,
+                    slot.pgid,
                     slot.tmux_session,
                     slot.worktree_path,
                     slot.branch,
                     slot.task_id,
+                    slot.run_id,
                     slot.started_at.isoformat() if slot.started_at else None,
                     slot.idle_since.isoformat() if slot.idle_since else None,
                 ),
@@ -262,6 +269,8 @@ class AgentPool:
                         "tmux_session": slot.tmux_session,
                         "worktree_path": slot.worktree_path,
                         "branch": slot.branch,
+                        "pid": slot.pid,
+                        "pgid": slot.pgid,
                     },
                 )
             self._seen_runtime_observations[slot.id] = set()
@@ -462,25 +471,28 @@ class AgentPool:
             # Kill old session if it somehow lingers
             await self._tmux.kill_session(slot.tmux_session)
 
-            pid = await self._tmux.spawn(name=slot.tmux_session, command=command, cwd=slot.worktree_path, env=env)
+            spawn_result = await self._tmux.spawn(
+                name=slot.tmux_session, command=command, cwd=slot.worktree_path, env=env
+            )
 
             # Update in-memory slot
             slot.state = AgentState.idle
-            slot.pid = pid
+            slot.pid = spawn_result.pid
+            slot.pgid = spawn_result.pgid
             slot.started_at = datetime.now(UTC)
 
             # Wait for ready prompt
             await self._wait_for_ready(slot)
 
             self._store.execute(
-                "UPDATE agents SET state = ?, pid = ?, started_at = ? WHERE id = ?",
-                (AgentState.idle, pid, slot.started_at.isoformat(), agent_id),
+                "UPDATE agents SET state = ?, pid = ?, pgid = ?, started_at = ? WHERE id = ?",
+                (AgentState.idle, spawn_result.pid, spawn_result.pgid, slot.started_at.isoformat(), agent_id),
             )
             if self._tracer and respawn_span:
                 self._tracer.end_span(
                     respawn_span,
                     {"respawned": True},
-                    metadata={"pid": pid, "tmux_session": slot.tmux_session},
+                    metadata={"pid": spawn_result.pid, "pgid": spawn_result.pgid, "tmux_session": slot.tmux_session},
                 )
             self._seen_runtime_observations[slot.id] = set()
             return slot
@@ -555,7 +567,7 @@ class AgentPool:
         self._seen_runtime_observations.pop(agent_id, None)
         self._active_task_contexts.pop(agent_id, None)
 
-    async def spawn_scout(self, runtime: str, model: str, repo_root: str) -> AgentSlot:
+    async def spawn_scout(self, runtime: str, model: str, repo_root: str, run_id: str | None = None) -> AgentSlot:
         """Spawn a scout agent in the canonical repo (no worktree).
 
         Scout agents explore the codebase and produce a ContextBrief JSON.
@@ -570,7 +582,7 @@ class AgentPool:
         env = adapter.build_env() or None
 
         tmux_session = f"hf-{name}"
-        pid = await self._tmux.spawn(name=tmux_session, command=command, cwd=repo_root, env=env)
+        spawn_result = await self._tmux.spawn(name=tmux_session, command=command, cwd=repo_root, env=env)
 
         slot = AgentSlot(
             id=str(uuid.uuid4()),
@@ -579,19 +591,32 @@ class AgentPool:
             model=model,
             capability="scout",
             state=AgentState.idle,
-            pid=pid,
+            pid=spawn_result.pid,
+            pgid=spawn_result.pgid,
             tmux_session=tmux_session,
             worktree_path=None,
             branch=None,
+            run_id=run_id,
             started_at=datetime.now(UTC),
         )
 
         await self._wait_for_ready(slot)
 
         self._store.execute(
-            """INSERT INTO agents (id, name, runtime, model, capability, state, pid, tmux_session)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (slot.id, slot.name, slot.runtime, slot.model, slot.capability, slot.state, slot.pid, slot.tmux_session),
+            """INSERT INTO agents (id, name, runtime, model, capability, state, pid, pgid, tmux_session, run_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                slot.id,
+                slot.name,
+                slot.runtime,
+                slot.model,
+                slot.capability,
+                slot.state,
+                slot.pid,
+                slot.pgid,
+                slot.tmux_session,
+                slot.run_id,
+            ),
         )
         return slot
 
@@ -630,6 +655,93 @@ class AgentPool:
                     pass
         await self._worktrees.cleanup()
         return released
+
+    async def kill_agents_for_run(
+        self, run_id: str, sigterm_timeout: float = 5.0, force: bool = False
+    ) -> dict[str, Any]:
+        """Kill all agents associated with a run.
+
+        Sends SIGTERM first, waits for sigterm_timeout seconds, then sends SIGKILL
+        to any remaining processes.
+
+        Args:
+            run_id: The run ID whose agents should be killed
+            sigterm_timeout: Seconds to wait after SIGTERM before SIGKILL
+            force: If True, skip SIGTERM and send SIGKILL immediately
+
+        Returns:
+            Dict with killed, failed, and timed_out agent counts
+        """
+        agents = self.list_agents()
+        run_agents = [a for a in agents if a.run_id == run_id and a.state != AgentState.dead]
+
+        result = {"killed": 0, "failed": 0, "timed_out": 0, "agents": []}
+
+        if not run_agents:
+            return result
+
+        # First pass: Send SIGTERM (unless force=True)
+        pending_kill: list[tuple[AgentSlot, int]] = []
+        for slot in run_agents:
+            if slot.pgid is None:
+                continue
+
+            try:
+                if force:
+                    # Skip to SIGKILL
+                    pending_kill.append((slot, slot.pgid))
+                else:
+                    # Send SIGTERM to process group
+                    os.killpg(slot.pgid, signal.SIGTERM)
+                    pending_kill.append((slot, slot.pgid))
+            except (OSError, ProcessLookupError):
+                # Process already gone
+                result["killed"] += 1
+                result["agents"].append({"agent_id": slot.id, "name": slot.name, "status": "already_gone"})
+                # Update state in DB
+                self._store.execute(
+                    "UPDATE agents SET state = ? WHERE id = ?",
+                    (AgentState.dead, slot.id),
+                )
+            except Exception:
+                result["failed"] += 1
+                result["agents"].append({"agent_id": slot.id, "name": slot.name, "status": "sigterm_failed"})
+
+        # Wait for processes to terminate
+        if pending_kill and not force:
+            await asyncio.sleep(sigterm_timeout)
+
+        # Second pass: Send SIGKILL to any remaining processes
+        for slot, pgid in pending_kill:
+            try:
+                # Check if process is still alive by trying to send signal 0
+                try:
+                    os.killpg(pgid, 0)
+                    # Process still alive, send SIGKILL
+                    os.killpg(pgid, signal.SIGKILL)
+                    result["timed_out"] += 1
+                    result["agents"].append({"agent_id": slot.id, "name": slot.name, "status": "sigkilled"})
+                except (OSError, ProcessLookupError):
+                    # Process terminated after SIGTERM
+                    result["killed"] += 1
+                    result["agents"].append({"agent_id": slot.id, "name": slot.name, "status": "sigterm_ok"})
+
+                # Kill tmux session
+                try:
+                    await self._tmux.kill_session(slot.tmux_session)
+                except Exception:
+                    pass
+
+                # Update state in DB
+                self._store.execute(
+                    "UPDATE agents SET state = ? WHERE id = ?",
+                    (AgentState.dead, slot.id),
+                )
+            except Exception:
+                result["failed"] += 1
+                result["agents"].append({"agent_id": slot.id, "name": slot.name, "status": "sigkill_failed"})
+
+        return result
 
     async def _wait_for_ready(self, slot: AgentSlot) -> None:
         """Wait for the agent runtime to show its ready prompt."""
@@ -719,10 +831,12 @@ def _row_to_slot(row: dict) -> AgentSlot:
         capability=row["capability"],
         state=AgentState(row["state"]),
         pid=row["pid"],
+        pgid=row.get("pgid"),
         tmux_session=row["tmux_session"],
         worktree_path=row["worktree_path"],
         branch=row["branch"],
         task_id=row["task_id"],
+        run_id=row.get("run_id"),
         started_at=datetime.fromisoformat(row["started_at"]) if row["started_at"] else None,
         idle_since=datetime.fromisoformat(row["idle_since"]) if row["idle_since"] else None,
     )

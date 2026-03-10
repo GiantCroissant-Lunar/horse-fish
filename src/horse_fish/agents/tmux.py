@@ -14,6 +14,14 @@ class _TmuxResult:
     stderr: str
 
 
+@dataclass(frozen=True, slots=True)
+class SpawnResult:
+    """Result from spawning a tmux session with process info."""
+
+    pid: int
+    pgid: int
+
+
 class TmuxManager:
     """Manage agent processes running in tmux sessions."""
 
@@ -23,7 +31,8 @@ class TmuxManager:
         command: str,
         cwd: str,
         env: dict[str, str] | None = None,
-    ) -> int:
+    ) -> SpawnResult:
+        """Spawn a new tmux session and return process info including PGID."""
         wrapped_cmd = self._build_wrapped_command(command, env)
         result = await self._run_tmux("new-session", "-d", "-s", name, "-c", cwd, wrapped_cmd)
         if result.returncode != 0:
@@ -38,9 +47,38 @@ class TmuxManager:
             raise RuntimeError(f"tmux session {name!r} did not report a pane pid")
 
         try:
-            return int(pane_pid)
+            pid = int(pane_pid)
         except ValueError as exc:
             raise RuntimeError(f"tmux session {name!r} returned invalid pane pid: {pane_pid!r}") from exc
+
+        # Get the process group ID (PGID) for the spawned process
+        # This allows us to kill the entire process tree
+        pgid = await self._get_pgid(pid)
+
+        return SpawnResult(pid=pid, pgid=pgid)
+
+    async def _get_pgid(self, pid: int) -> int:
+        """Get the process group ID for a given PID."""
+        try:
+            # Use ps to get the PGID
+            proc = await asyncio.create_subprocess_exec(
+                "ps",
+                "-o",
+                "pgid=",
+                "-p",
+                str(pid),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await proc.communicate()
+            if proc.returncode == 0:
+                pgid_str = stdout.decode().strip()
+                if pgid_str:
+                    return int(pgid_str)
+        except (ValueError, OSError):
+            pass
+        # Fallback: return the PID itself as the PGID (common on many systems)
+        return pid
 
     async def send_keys(self, session_name: str, text: str, enter_delay: float = 0.1) -> None:
         result = await self._run_tmux("send-keys", "-t", session_name, "-l", text)

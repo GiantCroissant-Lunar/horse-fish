@@ -49,10 +49,12 @@ class AgentSlot(BaseModel):
     capability: str  # builder | scout | reviewer | lead
     state: AgentState = AgentState.idle
     pid: int | None = None
+    pgid: int | None = None  # Process group ID for killing child processes
     tmux_session: str | None = None
     worktree_path: str | None = None
     branch: str | None = None
     task_id: str | None = None
+    run_id: str | None = None  # Associated run for process tracking
     started_at: datetime | None = None
     idle_since: datetime | None = None
 
