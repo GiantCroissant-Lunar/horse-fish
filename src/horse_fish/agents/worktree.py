@@ -115,7 +115,7 @@ class WorktreeManager:
             name=name,
         )
 
-    async def merge(self, name: str, auto_commit: bool = True) -> bool:
+    async def merge(self, name: str, auto_commit: bool = True) -> tuple[bool, list[str]]:
         """Merge a worktree's branch into the base branch.
 
         Args:
@@ -123,7 +123,8 @@ class WorktreeManager:
             auto_commit: If True, stage and commit uncommitted changes first.
 
         Returns:
-            True on success, False if there are merge conflicts.
+            Tuple of (success, conflict_files). On success the list is empty;
+            on conflict it contains the names of files that conflicted.
         """
         branch = f"horse-fish/{name}"
         path = self.base_dir / name
@@ -152,12 +153,15 @@ class WorktreeManager:
         try:
             await self._run_git("checkout", "main")
             await self._run_git("merge", "--no-ff", branch, "-m", f"Merge {branch}")
-            return True
+            return True, []
         except WorktreeError as e:
             if "conflict" in str(e).lower():
+                # Capture conflicting file names before aborting
+                _, diff_out, _ = await self._run_git("diff", "--name-only", "--diff-filter=U", check=False)
+                conflict_files = [f for f in diff_out.splitlines() if f.strip()]
                 # Abort the merge attempt
                 await self._run_git("merge", "--abort", check=False)
-                return False
+                return False, conflict_files
             raise
 
     async def remove(self, name: str) -> None:

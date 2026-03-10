@@ -500,7 +500,7 @@ async def test_merge_success(orchestrator, mock_pool):
         worktree_path="/tmp/worktree",
     )
     mock_pool._get_slot.return_value = slot
-    mock_pool._worktrees.merge = AsyncMock(return_value=True)
+    mock_pool._worktrees.merge = AsyncMock(return_value=(True, []))
 
     result = await orchestrator._merge(run)
 
@@ -526,7 +526,7 @@ async def test_merge_conflict(orchestrator, mock_pool):
         worktree_path="/tmp/worktree",
     )
     mock_pool._get_slot.return_value = slot
-    mock_pool._worktrees.merge = AsyncMock(return_value=False)
+    mock_pool._worktrees.merge = AsyncMock(return_value=(False, ["src/conflict.py"]))
 
     result = await orchestrator._merge(run)
 
@@ -617,7 +617,7 @@ async def test_full_lifecycle_success(orchestrator, mock_pool, mock_planner, moc
     )
 
     # Mock pool for merge phase
-    mock_pool._worktrees.merge = AsyncMock(return_value=True)
+    mock_pool._worktrees.merge = AsyncMock(return_value=(True, []))
 
     # Patch sleep
     async def mock_sleep(seconds):
@@ -740,7 +740,7 @@ async def test_full_lifecycle_merge_conflict(orchestrator, mock_pool, mock_plann
             GateResult(gate="compile", passed=True, output="ok", duration_seconds=1.0),
         ]
     )
-    mock_pool._worktrees.merge = AsyncMock(return_value=False)
+    mock_pool._worktrees.merge = AsyncMock(return_value=(False, ["src/conflict.py"]))
 
     async def mock_sleep(seconds):
         return None
@@ -1078,7 +1078,7 @@ async def test_merge_falls_back_to_direct_without_queue(mock_pool, mock_planner,
         branch="overstory/hf-subtask-1",
     )
     mock_pool._get_slot.return_value = slot
-    mock_pool._worktrees.merge = AsyncMock(return_value=True)
+    mock_pool._worktrees.merge = AsyncMock(return_value=(True, []))
 
     result = await orchestrator._merge(run)
 
@@ -1128,7 +1128,7 @@ async def test_run_stores_result_in_memory_on_completion(mock_pool, mock_planner
     mock_gates.run_all = AsyncMock(
         return_value=[GateResult(gate="compile", passed=True, output="ok", duration_seconds=1.0)]
     )
-    mock_pool._worktrees.merge = AsyncMock(return_value=True)
+    mock_pool._worktrees.merge = AsyncMock(return_value=(True, []))
 
     orchestrator = Orchestrator(
         pool=mock_pool,
@@ -1199,7 +1199,7 @@ async def test_run_scores_trace_outcomes(mock_pool, mock_planner, mock_gates):
     mock_gates.run_all = AsyncMock(
         return_value=[GateResult(gate="compile", passed=True, output="ok", duration_seconds=1.0)]
     )
-    mock_pool._worktrees.merge = AsyncMock(return_value=True)
+    mock_pool._worktrees.merge = AsyncMock(return_value=(True, []))
 
     mock_tracer = MagicMock()
     mock_trace = MagicMock()
@@ -1483,7 +1483,7 @@ async def test_run_scores_execution_retries_after_stall(mock_pool, mock_planner,
     mock_pool.check_status = AsyncMock(side_effect=check_status_by_agent)
     mock_pool.collect_result = AsyncMock(side_effect=collect_result_by_agent)
     mock_pool._get_slot.return_value = retry_slot
-    mock_pool._worktrees.merge = AsyncMock(return_value=True)
+    mock_pool._worktrees.merge = AsyncMock(return_value=(True, []))
     mock_gates.run_all = AsyncMock(
         return_value=[GateResult(gate="compile", passed=True, output="ok", duration_seconds=1.0)]
     )
@@ -1549,7 +1549,7 @@ async def test_run_scores_merge_conflicts(mock_pool, mock_planner, mock_gates):
     mock_gates.run_all = AsyncMock(
         return_value=[GateResult(gate="compile", passed=True, output="ok", duration_seconds=1.0)]
     )
-    mock_pool._worktrees.merge = AsyncMock(return_value=False)
+    mock_pool._worktrees.merge = AsyncMock(return_value=(False, ["src/conflict.py"]))
 
     mock_tracer = MagicMock()
     mock_trace = MagicMock()
@@ -1578,7 +1578,9 @@ async def test_run_scores_merge_conflicts(mock_pool, mock_planner, mock_gates):
     score_calls = {call.args[1]: call for call in mock_tracer.score_trace.call_args_list}
     assert score_calls["merge_conflict_count"].args[2] == 1.0
     assert score_calls["merge_conflict_count"].kwargs["metadata"] == {
-        "conflicts": [{"subtask_id": "subtask-1", "branch": "horse-fish/hf-subtask-1", "conflict_files": []}]
+        "conflicts": [
+            {"subtask_id": "subtask-1", "branch": "horse-fish/hf-subtask-1", "conflict_files": ["src/conflict.py"]}
+        ]
     }
     assert score_calls["merge_conflict"].args[2] == "conflict"
 
@@ -1612,7 +1614,7 @@ async def test_run_emits_subtask_operation_spans(mock_pool, mock_planner, mock_g
     mock_gates.run_all = AsyncMock(
         return_value=[GateResult(gate="compile", passed=True, output="ok", duration_seconds=1.0)]
     )
-    mock_pool._worktrees.merge = AsyncMock(return_value=True)
+    mock_pool._worktrees.merge = AsyncMock(return_value=(True, []))
 
     mock_tracer = MagicMock()
     mock_trace = MagicMock()
@@ -1764,6 +1766,8 @@ async def test_execute_detects_stalled_agent_and_retries(mock_pool, mock_planner
         return AgentState.dead
 
     mock_pool.check_status = AsyncMock(side_effect=check_status_by_agent)
+    # Heartbeat returns False so stall detection can fire (agent not producing output)
+    mock_pool.check_heartbeat = AsyncMock(return_value=False)
 
     def collect_result_by_agent(agent_id):
         if agent_id == "agent-1":
@@ -1806,6 +1810,7 @@ async def test_execute_fails_after_max_retries(mock_pool, mock_planner, mock_gat
     run.state = RunState.executing
 
     mock_pool.check_status = AsyncMock(return_value=AgentState.busy)
+    mock_pool.check_heartbeat = AsyncMock(return_value=False)  # No output change — allow stall detection
     mock_pool.collect_result = AsyncMock(
         return_value=SubtaskResult(subtask_id="subtask-1", success=False, output="", diff="", duration_seconds=0)
     )

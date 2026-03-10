@@ -29,7 +29,7 @@ def temp_store() -> Store:
 def mock_worktrees() -> MagicMock:
     """Create a mock WorktreeManager."""
     worktrees = MagicMock()
-    worktrees.merge = AsyncMock(return_value=True)
+    worktrees.merge = AsyncMock(return_value=(True, []))
     return worktrees
 
 
@@ -103,7 +103,7 @@ class TestMergeQueue:
     @pytest.mark.asyncio
     async def test_process_success(self, queue: MergeQueue, mock_worktrees: MagicMock) -> None:
         """Test processing queue with successful merges."""
-        mock_worktrees.merge = AsyncMock(return_value=True)
+        mock_worktrees.merge = AsyncMock(return_value=(True, []))
 
         await queue.enqueue("task-001", "agent-1", "horse-fish/agent-1")
         await queue.enqueue("task-002", "agent-2", "horse-fish/agent-2")
@@ -128,12 +128,12 @@ class TestMergeQueue:
         # First merge succeeds, second has conflict
         call_count = 0
 
-        async def mock_merge(name: str) -> bool:
+        async def mock_merge(name: str) -> tuple[bool, list[str]]:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return True
-            return False
+                return True, []
+            return False, ["src/conflict.py"]
 
         mock_worktrees.merge = AsyncMock(side_effect=mock_merge)
 
@@ -145,7 +145,8 @@ class TestMergeQueue:
         assert len(results) == 2
         assert results[0].success is True
         assert results[1].success is False
-        assert results[1].conflict_files == []
+        assert results[1].conflict_files == ["src/conflict.py"]
+        assert "src/conflict.py" in results[1].resolution_hint
 
         # First should be removed, second should remain with conflict status
         pending = await queue.pending()
@@ -199,7 +200,7 @@ class TestMergeQueue:
     @pytest.mark.asyncio
     async def test_process_returns_results_in_order(self, queue: MergeQueue, mock_worktrees: MagicMock) -> None:
         """Test that process returns results in the order they were processed."""
-        mock_worktrees.merge = AsyncMock(return_value=True)
+        mock_worktrees.merge = AsyncMock(return_value=(True, []))
 
         await queue.enqueue("task-a", "agent-a", "horse-fish/agent-a", priority=2)
         await queue.enqueue("task-b", "agent-b", "horse-fish/agent-b", priority=5)

@@ -58,6 +58,7 @@ class Orchestrator:
         stall_timeout_seconds: int = STALL_TIMEOUT_SECONDS,
         concurrency_limits: dict[RunState, int] | None = None,
         store: Store | None = None,
+        allow_partial_success: bool = False,
     ) -> None:
         self._pool = pool
         self._planner = planner
@@ -79,6 +80,7 @@ class Orchestrator:
         self._stall_timeout = stall_timeout_seconds
         self._concurrency_limits = concurrency_limits or {}
         self._store = store
+        self._allow_partial_success = allow_partial_success
         self._active_trace = None
         self._execution_retry_events = 0
         self._execution_retry_exhausted = 0
@@ -794,9 +796,19 @@ class Orchestrator:
             active_count -= retried_count
 
         # Any failures?
-        if any(s.state == SubtaskState.failed for s in run.subtasks):
-            run.state = RunState.failed
-            return run
+        failed = [s for s in run.subtasks if s.state == SubtaskState.failed]
+        succeeded = [s for s in run.subtasks if s.state == SubtaskState.done]
+        if failed:
+            if self._allow_partial_success and succeeded:
+                logger.warning(
+                    "Partial success: %d/%d subtasks failed, continuing with %d successful",
+                    len(failed),
+                    len(run.subtasks),
+                    len(succeeded),
+                )
+            else:
+                run.state = RunState.failed
+                return run
 
         run.state = RunState.reviewing
         return run
@@ -1023,7 +1035,17 @@ class Orchestrator:
             run.state = RunState.executing
             return run
 
-        run.state = RunState.merging if all_passed else RunState.failed
+        if all_passed:
+            run.state = RunState.merging
+        elif self._allow_partial_success and passed_subtasks > 0:
+            logger.warning(
+                "Partial success review: %d passed, %d failed gates — continuing to merge",
+                passed_subtasks,
+                failed_subtasks,
+            )
+            run.state = RunState.merging
+        else:
+            run.state = RunState.failed
         return run
 
     async def _merge(self, run: Run) -> Run:
@@ -1041,6 +1063,7 @@ class Orchestrator:
                     self._tracer.end_span(merge_span, {"enqueued": True}, metadata={"agent_name": slot.name})
 
             results = await self._merge_queue.process()
+            merge_failures = 0
             for result in results:
                 if not result.success:
                     logger.error("Merge conflict for subtask %s", result.subtask_id)
@@ -1049,8 +1072,13 @@ class Orchestrator:
                         branch=result.branch,
                         conflict_files=result.conflict_files,
                     )
-                    run.state = RunState.failed
-                    return run
+                    merge_failures += 1
+                    if not self._allow_partial_success:
+                        run.state = RunState.failed
+                        return run
+            if merge_failures and not self._allow_partial_success:
+                run.state = RunState.failed
+                return run
         else:
             # Fallback: direct merge without queue
             for subtask in run.subtasks:
@@ -1062,36 +1090,46 @@ class Orchestrator:
                 try:
                     slot = self._pool._get_slot(subtask.agent)
                     merge_span = self._subtask_span("subtask.merge", subtask, branch=slot.branch)
-                    success = await self._pool._worktrees.merge(slot.name)
+                    success, conflict_files = await self._pool._worktrees.merge(slot.name)
                     if not success:
                         logger.error("Merge conflict for subtask %s", subtask.id)
-                        self._record_merge_conflict(subtask.id, branch=slot.branch)
+                        self._record_merge_conflict(subtask.id, branch=slot.branch, conflict_files=conflict_files)
                         subtask.state = SubtaskState.failed
-                        run.state = RunState.failed
+                        if not self._allow_partial_success:
+                            run.state = RunState.failed
+                            if merge_span:
+                                self._tracer.end_span(
+                                    merge_span,
+                                    {"success": False},
+                                    level="ERROR",
+                                    status_message="merge conflict",
+                                )
+                            return run
                         if merge_span:
                             self._tracer.end_span(
                                 merge_span,
-                                {"success": False},
-                                level="ERROR",
-                                status_message="merge conflict",
+                                {"success": False, "partial_success": True},
+                                level="WARNING",
+                                status_message="merge conflict (partial success mode)",
                             )
-                        return run
                     if merge_span:
                         self._tracer.end_span(merge_span, {"success": True})
                 except Exception as exc:
                     logger.error("Merge failed for subtask %s: %s", subtask.id, exc)
                     subtask.state = SubtaskState.failed
-                    run.state = RunState.failed
-                    if self._tracer and merge_span:
-                        self._tracer.end_span(
-                            merge_span,
-                            {"error": str(exc)},
-                            level="ERROR",
-                            status_message=str(exc),
-                        )
-                    return run
+                    if not self._allow_partial_success:
+                        run.state = RunState.failed
+                        if self._tracer and merge_span:
+                            self._tracer.end_span(
+                                merge_span,
+                                {"error": str(exc)},
+                                level="ERROR",
+                                status_message=str(exc),
+                            )
+                        return run
 
-        run.state = RunState.completed
+        has_failures = any(s.state == SubtaskState.failed for s in run.subtasks)
+        run.state = RunState.partial_success if (has_failures and self._allow_partial_success) else RunState.completed
         return run
 
     @staticmethod

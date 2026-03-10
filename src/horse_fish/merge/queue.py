@@ -17,6 +17,7 @@ class MergeResult:
     branch: str
     success: bool
     conflict_files: list[str] = field(default_factory=list)
+    resolution_hint: str = ""
 
 
 class MergeQueue:
@@ -108,7 +109,7 @@ class MergeQueue:
             # Attempt the merge
             # Note: WorktreeManager.merge() takes a worktree name, not branch
             # We derive the worktree name from the agent_name
-            success = await self.worktrees.merge(agent_name)
+            success, conflict_files = await self.worktrees.merge(agent_name)
 
             if success:
                 result = MergeResult(
@@ -123,14 +124,22 @@ class MergeQueue:
                     (queue_id,),
                 )
             else:
-                # Merge had conflicts
-                # For now, we return empty conflict_files since worktrees.merge()
-                # doesn't provide detailed conflict info
+                # Build a human-readable resolution hint
+                if conflict_files:
+                    file_list = ", ".join(conflict_files)
+                    hint = (
+                        f"Merge conflict in {len(conflict_files)} file(s): "
+                        f"{file_list}. Resolve conflicts and re-enqueue."
+                    )
+                else:
+                    hint = "Merge conflict detected but no specific files identified. Check branch manually."
+
                 result = MergeResult(
                     subtask_id=subtask_id,
                     branch=branch,
                     success=False,
-                    conflict_files=[],
+                    conflict_files=conflict_files,
+                    resolution_hint=hint,
                 )
                 # Update status to reflect conflict (keep in queue for manual resolution)
                 self.store.execute(

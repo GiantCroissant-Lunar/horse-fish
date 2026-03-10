@@ -31,6 +31,7 @@ class RunState(StrEnum):
     reviewing = "reviewing"
     merging = "merging"
     completed = "completed"
+    partial_success = "partial_success"
     failed = "failed"
     cancelled = "cancelled"
 
@@ -121,6 +122,7 @@ class Run(BaseModel):
     lessons: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     completed_at: datetime | None = None
+    allow_partial_success: bool = False
 
     @classmethod
     def create(cls, task: str) -> Run:

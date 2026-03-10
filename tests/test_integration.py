@@ -115,7 +115,7 @@ def mock_gates() -> MagicMock:
 def mock_worktree_manager() -> MagicMock:
     """Create a mocked WorktreeManager."""
     worktrees = MagicMock(spec=WorktreeManager)
-    worktrees.merge = AsyncMock(return_value=True)
+    worktrees.merge = AsyncMock(return_value=(True, []))
     return worktrees
 
 
@@ -252,7 +252,7 @@ async def test_orchestrator_merge_conflict(
 ) -> None:
     """Test that merge conflicts lead to failed state."""
     mock_worktree_manager = MagicMock(spec=WorktreeManager)
-    mock_worktree_manager.merge = AsyncMock(return_value=False)  # Simulate conflict
+    mock_worktree_manager.merge = AsyncMock(return_value=(False, ["src/conflict.py"]))  # Simulate conflict
 
     mock_pool._worktrees = mock_worktree_manager
 
@@ -382,7 +382,7 @@ async def test_orchestrator_with_real_store(tmp_path: Path) -> None:
         )
         mock_gates.all_passed = MagicMock(return_value=True)
 
-        mock_worktrees.merge = AsyncMock(return_value=True)
+        mock_worktrees.merge = AsyncMock(return_value=(True, []))
 
         orchestrator = Orchestrator(
             pool=mock_pool, planner=mock_planner, gates=mock_gates, runtime="claude", model="claude-sonnet-4-6"

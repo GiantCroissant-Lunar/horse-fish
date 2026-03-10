@@ -209,6 +209,7 @@ async def test_execute_decrements_active_count_on_exhausted_retry(orchestrator, 
         return AgentState.dead
 
     mock_pool.check_status = AsyncMock(side_effect=check_status_by_agent)
+    mock_pool.check_heartbeat = AsyncMock(return_value=False)  # No output change — allow stall detection
 
     def collect_result_by_agent(agent_id):
         if agent_id == "agent-1":
@@ -365,7 +366,7 @@ async def test_orchestrator_persists_run_initial_state(tmp_path: Path, mock_pool
 
     # Mock worktree merge
     mock_pool._worktrees = AsyncMock()
-    mock_pool._worktrees.merge = AsyncMock(return_value=True)
+    mock_pool._worktrees.merge = AsyncMock(return_value=(True, []))
 
     with pytest.MonkeyPatch().context() as m:
         m.setattr("horse_fish.orchestrator.engine.asyncio.sleep", mock_sleep)
@@ -421,7 +422,7 @@ async def test_orchestrator_persists_subtask_state(tmp_path: Path, mock_pool, mo
 
     # Mock worktree merge
     mock_pool._worktrees = AsyncMock()
-    mock_pool._worktrees.merge = AsyncMock(return_value=True)
+    mock_pool._worktrees.merge = AsyncMock(return_value=(True, []))
 
     with pytest.MonkeyPatch().context() as m:
         m.setattr("horse_fish.orchestrator.engine.asyncio.sleep", mock_sleep)
@@ -478,7 +479,7 @@ async def test_orchestrator_without_store_does_not_persist(tmp_path: Path, mock_
 
     # Mock worktree merge
     mock_pool._worktrees = AsyncMock()
-    mock_pool._worktrees.merge = AsyncMock(return_value=True)
+    mock_pool._worktrees.merge = AsyncMock(return_value=(True, []))
 
     with pytest.MonkeyPatch().context() as m:
         m.setattr("horse_fish.orchestrator.engine.asyncio.sleep", mock_sleep)
