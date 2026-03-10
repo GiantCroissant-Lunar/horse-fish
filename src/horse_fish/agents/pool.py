@@ -555,6 +555,63 @@ class AgentPool:
         self._seen_runtime_observations.pop(agent_id, None)
         self._active_task_contexts.pop(agent_id, None)
 
+    async def spawn_scout(self, runtime: str, model: str, repo_root: str) -> AgentSlot:
+        """Spawn a scout agent in the canonical repo (no worktree).
+
+        Scout agents explore the codebase and produce a ContextBrief JSON.
+        They run in read-only mode against the canonical repo directory.
+        """
+        if runtime not in RUNTIME_REGISTRY:
+            raise ValueError(f"unknown runtime {runtime!r}; available: {sorted(RUNTIME_REGISTRY)}")
+
+        name = f"hf-scout-{uuid.uuid4().hex[:8]}"
+        adapter = RUNTIME_REGISTRY[runtime]
+        command = adapter.build_spawn_command(model)
+        env = adapter.build_env() or None
+
+        tmux_session = f"hf-{name}"
+        pid = await self._tmux.spawn(name=tmux_session, command=command, cwd=repo_root, env=env)
+
+        slot = AgentSlot(
+            id=str(uuid.uuid4()),
+            name=name,
+            runtime=runtime,
+            model=model,
+            capability="scout",
+            state=AgentState.idle,
+            pid=pid,
+            tmux_session=tmux_session,
+            worktree_path=None,
+            branch=None,
+            started_at=datetime.now(UTC),
+        )
+
+        await self._wait_for_ready(slot)
+
+        self._store.execute(
+            """INSERT INTO agents (id, name, runtime, model, capability, state, pid, tmux_session)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (slot.id, slot.name, slot.runtime, slot.model, slot.capability, slot.state, slot.pid, slot.tmux_session),
+        )
+        return slot
+
+    async def collect_scout_output(self, agent_id: str) -> str:
+        """Capture the full pane output from a scout agent.
+
+        Returns the raw tmux pane content for JSON extraction.
+        """
+        slot = self._get_slot(agent_id)
+        output = await self._tmux.capture_pane(slot.tmux_session) or ""
+        return output
+
+    async def release_scout(self, agent_id: str) -> None:
+        """Kill a scout agent's tmux session (no worktree to clean up)."""
+        slot = self._get_slot(agent_id)
+        await self._tmux.kill_session(slot.tmux_session)
+        self._store.execute("UPDATE agents SET state = ? WHERE id = ?", (AgentState.dead, agent_id))
+        self._seen_runtime_observations.pop(agent_id, None)
+        self._active_task_contexts.pop(agent_id, None)
+
     def list_agents(self) -> list[AgentSlot]:
         """Return all persisted agent slots."""
         rows = self._store.fetchall("SELECT * FROM agents")

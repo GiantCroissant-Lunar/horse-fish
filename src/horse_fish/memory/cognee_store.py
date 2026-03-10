@@ -53,7 +53,7 @@ class CogneeMemory:
         fallback_llm_endpoint: str | None = None,
     ) -> None:
         if data_dir is None:
-            data_dir = Path.home() / ".horse-fish" / "cognee"
+            data_dir = Path(".horse-fish") / "cognee"
         else:
             data_dir = Path(data_dir)
 

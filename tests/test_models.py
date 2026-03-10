@@ -230,7 +230,7 @@ class TestRun:
         assert run.task == "build the feature"
         assert isinstance(run.id, str)
         assert len(run.id) == 36
-        assert run.state == RunState.planning
+        assert run.state == RunState.scouting
         assert run.subtasks == []
         assert isinstance(run.created_at, datetime)
         assert run.completed_at is None
@@ -248,7 +248,7 @@ class TestRun:
 
     def test_state_transitions(self):
         run = Run.create("workflow")
-        assert run.state == RunState.planning
+        assert run.state == RunState.scouting
         run.state = RunState.executing
         assert run.state == RunState.executing
         run.state = RunState.completed
@@ -257,7 +257,7 @@ class TestRun:
         run = Run.create("serialize test")
         run.subtasks.append(Subtask.create("sub1"))
         data = run.model_dump()
-        assert data["state"] == "planning"
+        assert data["state"] == "scouting"
         assert len(data["subtasks"]) == 1
         restored = Run.model_validate(data)
         assert restored.id == run.id

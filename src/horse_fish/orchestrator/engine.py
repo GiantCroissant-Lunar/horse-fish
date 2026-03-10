@@ -13,10 +13,11 @@ from horse_fish.dispatch.selector import AgentSelector
 from horse_fish.memory.lessons import LessonStore
 from horse_fish.memory.store import MemoryStore
 from horse_fish.merge.queue import MergeQueue
-from horse_fish.models import AgentState, Run, RunState, Subtask, SubtaskResult, SubtaskState
+from horse_fish.models import AgentState, ContextBrief, Run, RunState, Subtask, SubtaskResult, SubtaskState
 from horse_fish.observability.log_context import clear_log_context, reset_log_context, set_log_context
 from horse_fish.observability.traces import Tracer
 from horse_fish.planner.decompose import Planner
+from horse_fish.planner.scout import SCOUT_PROMPT_TEMPLATE, parse_scout_output, programmatic_scout
 from horse_fish.planner.smart import SmartPlanner
 from horse_fish.store.db import Store
 from horse_fish.validation.gates import ValidationGates
@@ -84,7 +85,9 @@ class Orchestrator:
         self._gate_retry_events = 0
         self._gate_retry_exhausted = 0
         self._merge_conflicts: list[dict[str, object]] = []
+        self._context_brief: ContextBrief | None = None
         self._handlers: dict[RunState, _Handler] = {
+            RunState.scouting: self._scout,
             RunState.planning: self._plan,
             RunState.executing: self._execute,
             RunState.reviewing: self._review,
@@ -496,11 +499,125 @@ class Orchestrator:
 
         return retried + failed
 
+    async def _scout(self, run: Run) -> Run:
+        """Gather codebase context by spawning a scout agent.
+
+        Spawns a real agent that explores the codebase and produces a ContextBrief.
+        Falls back to programmatic scout if agent fails.
+        """
+        brief = await self._run_agent_scout(run)
+        if brief is None:
+            logger.info("Agent scout failed or unavailable, using programmatic fallback")
+            try:
+                brief = programmatic_scout(run.task)
+            except Exception as exc:
+                logger.warning("Programmatic scout also failed: %s", exc)
+                brief = None
+
+        self._context_brief = brief
+        if brief:
+            logger.info(
+                "Scout phase complete: %d files, %d patterns, %d criteria",
+                len(brief.relevant_files),
+                len(brief.patterns),
+                len(brief.acceptance_criteria),
+            )
+        run.state = RunState.planning
+        return run
+
+    async def _run_agent_scout(self, run: Run) -> ContextBrief | None:
+        """Spawn a scout agent, send the scout prompt, wait for output, parse brief."""
+        import shutil
+        from pathlib import Path
+
+        repo_root = str(Path.cwd())
+
+        # Read project context for the scout prompt
+        project_context = ""
+        claude_md = Path(repo_root) / "CLAUDE.md"
+        if claude_md.exists():
+            try:
+                project_context = claude_md.read_text(encoding="utf-8")
+            except Exception:
+                pass
+
+        prompt = SCOUT_PROMPT_TEMPLATE.format(
+            task=run.task,
+            project_context=project_context or "No project context file found.",
+        )
+
+        # Find first available runtime (prefer configured, then cheap options)
+        from horse_fish.agents.runtime import RUNTIME_REGISTRY
+
+        selected_runtime = None
+        for rt_name in (self._runtime, "pi", "kimi", "claude"):
+            if rt_name in RUNTIME_REGISTRY and shutil.which(rt_name):
+                selected_runtime = rt_name
+                break
+
+        if not selected_runtime:
+            logger.warning("No scout runtime available")
+            return None
+
+        scout_slot = None
+        try:
+            scout_slot = await self._pool.spawn_scout(
+                runtime=selected_runtime,
+                model=self._model or "",
+                repo_root=repo_root,
+            )
+
+            # Send scout prompt (raw mode — no task/fix template wrapping)
+            await self._pool.send_task(
+                scout_slot.id,
+                prompt,
+                task_id="scout-" + run.id[:8],
+                raw=True,
+                run_id=run.id,
+            )
+
+            # Poll for completion (agent becomes dead or produces JSON output)
+            scout_timeout = 120.0
+            poll_interval = 5.0
+            elapsed = 0.0
+            while elapsed < scout_timeout:
+                await asyncio.sleep(poll_interval)
+                elapsed += poll_interval
+
+                status = await self._pool.check_status(scout_slot.id)
+                if status == AgentState.dead:
+                    break
+
+                # Check if agent has produced JSON output
+                output = await self._pool.collect_scout_output(scout_slot.id)
+                if output and "{" in output and "}" in output:
+                    brief = parse_scout_output(output)
+                    if brief:
+                        return brief
+
+            # Final attempt to capture output after timeout/death
+            output = await self._pool.collect_scout_output(scout_slot.id)
+            if output:
+                return parse_scout_output(output)
+
+            return None
+
+        except Exception as exc:
+            logger.warning("Agent scout failed: %s", exc)
+            return None
+        finally:
+            if scout_slot:
+                try:
+                    await self._pool.release_scout(scout_slot.id)
+                except Exception:
+                    pass
+
     async def _plan(self, run: Run) -> Run:
         """Decompose the task into subtasks via the Planner."""
+        brief = self._context_brief
         try:
             if self._smart_planner:
-                subtasks, complexity = await self._smart_planner.decompose(run.task)
+                subtasks, complexity = await self._smart_planner.decompose(run.task, context_brief=brief)
                 run.complexity = complexity
             else:
                 subtasks = await self._planner.decompose(run.task)

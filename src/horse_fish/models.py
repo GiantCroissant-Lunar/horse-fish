@@ -74,19 +74,20 @@ class SubtaskResult(BaseModel):
 class FileContext(BaseModel):
     """Context information about a single file relevant to a task."""
 
-    path: str
-    description: str
-    relevance_score: float = 1.0
+    path: str  # relative to repo root
+    purpose: str  # one-line description of what this file does
+    line_count: int | None = None
 
 
 class ContextBrief(BaseModel):
     """Context brief produced by scouting phase for enriched planning."""
 
-    project_type: str = ""
-    key_files: list[FileContext] = Field(default_factory=list)
-    conventions: list[str] = Field(default_factory=list)
-    dependencies: list[str] = Field(default_factory=list)
-    similar_patterns: list[str] = Field(default_factory=list)
+    relevant_files: list[FileContext] = Field(default_factory=list)
+    patterns: list[str] = Field(default_factory=list)  # conventions found in codebase
+    dependencies: list[str] = Field(default_factory=list)  # what the change touches
+    acceptance_criteria: list[str] = Field(default_factory=list)  # how to verify success
+    risks: list[str] = Field(default_factory=list)  # things planner should know
+    suggested_approach: str = ""  # brief implementation strategy
 
 
 class Subtask(BaseModel):
@@ -112,7 +113,7 @@ class Subtask(BaseModel):
 class Run(BaseModel):
     id: str
     task: str
-    state: RunState = RunState.planning
+    state: RunState = RunState.scouting
     complexity: TaskComplexity | None = None
     subtasks: list[Subtask] = Field(default_factory=list)
     lessons: list[str] = Field(default_factory=list)

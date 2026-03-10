@@ -7,6 +7,8 @@ services:
       POSTGRES_USER: langfuse
       POSTGRES_PASSWORD: langfuse  # pragma: allowlist secret (localhost dev only)
       POSTGRES_DB: langfuse
+      TZ: UTC
+      PGTZ: UTC
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
@@ -22,9 +24,9 @@ services:
     restart: unless-stopped
     user: "101:101"
     environment:
-      CLICKHOUSE_DB: langfuse
-      CLICKHOUSE_USER: langfuse
-      CLICKHOUSE_PASSWORD: langfuse
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: clickhouse  # pragma: allowlist secret
     ports:
       - "127.0.0.1:8123:8123"
       - "127.0.0.1:9000:9000"
@@ -34,16 +36,22 @@ services:
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1"]
       interval: 5s
-      timeout: 3s
+      timeout: 5s
       retries: 10
+      start_period: 10s
 
   langfuse-redis:
     image: redis:7
     restart: unless-stopped
+    command: >
+      --requirepass langfuse-redis
+      --maxmemory-policy noeviction
     ports:
       - "127.0.0.1:6379:6379"
+    volumes:
+      - langfuse-redis-data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "langfuse-redis", "ping"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -51,7 +59,8 @@ services:
   langfuse-minio:
     image: minio/minio:latest
     restart: unless-stopped
-    command: server /data --console-address ":9001"
+    entrypoint: sh
+    command: -c 'mkdir -p /data/langfuse && minio server /data --console-address ":9001"'
     environment:
       MINIO_ROOT_USER: langfuse
       MINIO_ROOT_PASSWORD: langfuse123  # pragma: allowlist secret (localhost dev only)
@@ -65,11 +74,17 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+      start_period: 5s
 
   langfuse-worker:
     image: langfuse/langfuse-worker:3
     restart: unless-stopped
-    depends_on:
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    depends_on: &langfuse-depends-on
       langfuse-postgres:
         condition: service_healthy
       langfuse-clickhouse:
@@ -80,18 +95,34 @@ services:
         condition: service_healthy
     ports:
       - "127.0.0.1:3030:3030"
-    environment:
+    environment: &langfuse-env
       DATABASE_URL: postgresql://langfuse:langfuse@langfuse-postgres:5432/langfuse  # pragma: allowlist secret
       CLICKHOUSE_URL: http://langfuse-clickhouse:8123
-      CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse:langfuse@langfuse-clickhouse:9000/langfuse
+      CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse-clickhouse:9000
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: clickhouse  # pragma: allowlist secret
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
       REDIS_HOST: langfuse-redis
       REDIS_PORT: "6379"
+      REDIS_AUTH: langfuse-redis
+      # S3 event upload (traces/spans ingestion)
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: langfuse123
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: "events/"
+      # S3 media upload (attachments)
       LANGFUSE_S3_MEDIA_UPLOAD_ENABLED: "true"
-      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://langfuse-minio:9000
       LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
       LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: langfuse
       LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: langfuse123
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://localhost:9090
       LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: "media/"
+      # General
       SALT: "horse-fish-salt-change-in-prod"
       ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
       TELEMETRY_ENABLED: "false"
@@ -101,37 +132,30 @@ services:
   langfuse-web:
     image: langfuse/langfuse:3
     restart: unless-stopped
-    depends_on:
-      langfuse-postgres:
-        condition: service_healthy
-      langfuse-clickhouse:
-        condition: service_healthy
-      langfuse-redis:
-        condition: service_healthy
-      langfuse-minio:
-        condition: service_healthy
+    depends_on: *langfuse-depends-on
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     ports:
       - "0.0.0.0:3000:3000"
     environment:
-      DATABASE_URL: postgresql://langfuse:langfuse@langfuse-postgres:5432/langfuse  # pragma: allowlist secret
-      CLICKHOUSE_URL: http://langfuse-clickhouse:8123
-      CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse:langfuse@langfuse-clickhouse:9000/langfuse
-      REDIS_HOST: langfuse-redis
-      REDIS_PORT: "6379"
-      LANGFUSE_S3_MEDIA_UPLOAD_ENABLED: "true"
-      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://langfuse-minio:9000
-      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
-      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: langfuse
-      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: langfuse123
-      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
-      SALT: "horse-fish-salt-change-in-prod"
-      ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
-      TELEMETRY_ENABLED: "false"
-      NEXTAUTH_SECRET: "horse-fish-secret"  # pragma: allowlist secret (localhost dev only)
-      NEXTAUTH_URL: "http://localhost:3000"
+      <<: *langfuse-env
+      # Auto-provision org, project, and API keys on first boot
+      LANGFUSE_INIT_ORG_ID: "horse-fish-org"
+      LANGFUSE_INIT_ORG_NAME: "Horse Fish"
+      LANGFUSE_INIT_PROJECT_ID: "horse-fish"
+      LANGFUSE_INIT_PROJECT_NAME: "Horse Fish Swarm"
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: "pk-hf-dev-local"
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: "sk-hf-dev-local"  # pragma: allowlist secret (localhost dev only)
+      LANGFUSE_INIT_USER_EMAIL: "admin@horse-fish.local"
+      LANGFUSE_INIT_USER_NAME: "Admin"
+      LANGFUSE_INIT_USER_PASSWORD: "horse-fish-admin"  # pragma: allowlist secret (localhost dev only)
 
 volumes:
   langfuse-pgdata:
   langfuse-clickhouse-data:
   langfuse-clickhouse-logs:
+  langfuse-redis-data:
   langfuse-minio-data:

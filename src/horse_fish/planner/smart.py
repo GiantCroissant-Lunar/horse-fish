@@ -8,9 +8,10 @@ import re
 from typing import Any
 
 from horse_fish.memory.lessons import LessonStore
-from horse_fish.models import Subtask, TaskComplexity
+from horse_fish.models import ContextBrief, Subtask, TaskComplexity
 from horse_fish.observability.prompts import resolve_text_prompt
 from horse_fish.planner.decompose import Planner
+from horse_fish.planner.scout import format_brief_for_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,8 @@ NOT just "multiple files" — only if the changes have zero coupling.
 When in doubt, choose SOLO. Over-decomposition wastes more time than under-decomposition.
 
 {lessons}
+
+{codebase_context}
 
 Task: {task}
 Context: {context}
@@ -63,8 +66,15 @@ class SmartPlanner:
         self._lessons = lesson_store
         self._cognee = cognee_memory
 
-    async def decompose(self, task: str, context: str = "") -> tuple[list[Subtask], TaskComplexity]:
+    async def decompose(
+        self, task: str, context: str = "", context_brief: ContextBrief | None = None
+    ) -> tuple[list[Subtask], TaskComplexity]:
         """Classify task complexity, then decompose if needed.
+
+        Args:
+            task: The task description.
+            context: Additional context string.
+            context_brief: Structured codebase context from scout phase.
 
         Returns:
             Tuple of (subtasks, complexity).
@@ -75,37 +85,52 @@ class SmartPlanner:
         # 2. Query Cognee for semantic context from past runs
         cognee_context = await self._get_cognee_context(task)
         if cognee_context:
-            past_work = f"Past similar work:\n{cognee_context}"
-            context = f"{context}\n\n{past_work}" if context else past_work
+            past_work = "Past similar work:\n" + cognee_context
+            context = context + "\n\n" + past_work if context else past_work
 
-        # 3. Classify
-        complexity = await self._classify(task, context, lessons_text)
+        # 3. Inject codebase context from scout brief
+        brief_text = format_brief_for_prompt(context_brief) if context_brief else ""
 
-        # 3. SOLO → single subtask, skip decomposition
+        # 4. Classify
+        complexity = await self._classify(task, context, lessons_text, brief_text)
+
+        # 5. SOLO → single subtask, skip decomposition
         if complexity == TaskComplexity.solo:
-            return [Subtask.create(task)], complexity
+            subtask = Subtask.create(task)
+            if context_brief and context_brief.acceptance_criteria:
+                subtask.acceptance_criteria = context_brief.acceptance_criteria
+            return [subtask], complexity
 
-        # 4. Decompose
+        # 6. Decompose — enrich context with brief
+        decompose_context = context
+        if brief_text:
+            decompose_context = brief_text + "\n\n" + context if context else brief_text
         try:
-            subtasks = await self._planner.decompose(task, context)
+            subtasks = await self._planner.decompose(task, decompose_context)
         except Exception as exc:
             logger.warning("Decomposition failed, falling back to SOLO: %s", exc)
             return [Subtask.create(task)], TaskComplexity.solo
 
-        # 5. Strip ceremony
+        # 7. Strip ceremony
         subtasks = self._strip_ceremony(subtasks)
 
-        # 6. Cap
+        # 8. Cap
         cap = _MAX_SUBTASKS.get(complexity, 8)
         subtasks = subtasks[:cap]
 
-        # 7. Fallback if empty
+        # 9. Propagate acceptance criteria from brief
+        if context_brief and context_brief.acceptance_criteria:
+            for subtask in subtasks:
+                if not subtask.acceptance_criteria:
+                    subtask.acceptance_criteria = context_brief.acceptance_criteria
+
+        # 10. Fallback if empty
         if not subtasks:
             return [Subtask.create(task)], complexity
 
         return subtasks, complexity
 
-    async def _classify(self, task: str, context: str, lessons: str) -> TaskComplexity:
+    async def _classify(self, task: str, context: str, lessons: str, codebase_context: str = "") -> TaskComplexity:
         """Ask the LLM to classify task complexity."""
         tracer = getattr(self._planner, "_tracer", None)
         resolved_prompt = resolve_text_prompt(
@@ -114,7 +139,8 @@ class SmartPlanner:
             _CLASSIFY_PROMPT,
             task=task,
             context=context or "No additional context.",
-            lessons=f"Lessons from past runs:\n{lessons}" if lessons else "",
+            lessons="Lessons from past runs:\n" + lessons if lessons else "",
+            codebase_context="Codebase context:\n" + codebase_context if codebase_context else "",
         )
         prompt = resolved_prompt.compiled
         generation = (

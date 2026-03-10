@@ -50,7 +50,7 @@ class MemoryStore:
             store: Optional SQLite Store instance for metadata tracking.
         """
         if data_dir is None:
-            data_dir = Path.home() / ".horse-fish" / "memory"
+            data_dir = Path(".horse-fish") / "memory"
         else:
             data_dir = Path(data_dir)
 
