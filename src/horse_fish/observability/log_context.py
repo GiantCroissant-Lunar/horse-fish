@@ -34,9 +34,9 @@ class LogContextFilter(logging.Filter):
         Returns:
             True to allow the record to be processed.
         """
-        record.run_id = run_id_var.get()  # type: ignore[attr-defined]
-        record.subtask_id = subtask_id_var.get()  # type: ignore[attr-defined]
-        record.agent_id = agent_id_var.get()  # type: ignore[attr-defined]
+        record.run_id = run_id_var.get() or ""  # type: ignore[attr-defined]
+        record.subtask_id = subtask_id_var.get() or ""  # type: ignore[attr-defined]
+        record.agent_id = agent_id_var.get() or ""  # type: ignore[attr-defined]
         return True
 
 
@@ -132,34 +132,23 @@ def setup_logging(
         level = getattr(logging, level.upper(), logging.INFO)
 
     if fmt is None:
-        fmt = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-        # Add context fields if any are present
-        context_fmt = []
-        if run_id_var.get() is not None:
-            context_fmt.append("run=%(run_id)s")
-        if subtask_id_var.get() is not None:
-            context_fmt.append("subtask=%(subtask_id)s")
-        if agent_id_var.get() is not None:
-            context_fmt.append("agent=%(agent_id)s")
-        if context_fmt:
-            fmt = "%(asctime)s - %(name)s - %(levelname)s - " + " ".join(context_fmt) + " - %(message)s"
+        fmt = (
+            "%(asctime)s %(levelname)-7s [run:%(run_id)s] [subtask:%(subtask_id)s]"
+            " [agent:%(agent_id)s] %(name)s — %(message)s"
+        )
 
     handler = logging.StreamHandler(stream or sys.stderr)
     handler.setFormatter(logging.Formatter(fmt))
     handler.addFilter(LogContextFilter())
 
-    root_logger = logging.getLogger()
-    root_logger.setLevel(level)
-
-    # Remove existing handlers to avoid duplicates
-    for h in root_logger.handlers[:]:
-        root_logger.removeHandler(h)
-
-    root_logger.addHandler(handler)
-
-    # Also configure horse_fish loggers
     hf_logger = logging.getLogger("horse_fish")
     hf_logger.setLevel(level)
+
+    # Remove existing handlers to avoid duplicates
+    for h in hf_logger.handlers[:]:
+        hf_logger.removeHandler(h)
+
+    hf_logger.addHandler(handler)
 
 
 def warn_if_no_langfuse() -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from typing import Any
@@ -202,10 +203,13 @@ class SmartPlanner:
         if not self._cognee:
             return ""
         try:
-            hits = await self._cognee.find_similar_tasks(task)
+            hits = await asyncio.wait_for(self._cognee.find_similar_tasks(task), timeout=15.0)
             if not hits:
                 return ""
             return "\n".join(f"- {hit.content}" for hit in hits[:3])
+        except TimeoutError:
+            logger.warning("Cognee query timed out after 15s, skipping")
+            return ""
         except Exception as exc:
             logger.warning("Failed to query Cognee: %s", exc)
             return ""

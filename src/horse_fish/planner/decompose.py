@@ -139,7 +139,7 @@ class Planner:
         template = _CLI_COMMANDS[self.runtime]
         return [part.format(model=self.model, prompt=prompt) if "{" in part else part for part in template]
 
-    async def _run_cli(self, cmd: list[str]) -> str:
+    async def _run_cli(self, cmd: list[str], timeout: float = 120.0) -> str:
         env = None
         adapter = RUNTIME_REGISTRY.get(self.runtime)
         if adapter:
@@ -152,7 +152,12 @@ class Planner:
             stderr=asyncio.subprocess.PIPE,
             env=env,
         )
-        stdout, stderr = await proc.communicate()
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise PlannerError(f"Runtime CLI timed out after {timeout}s") from None
         if proc.returncode != 0:
             raise PlannerError(f"Runtime CLI exited with code {proc.returncode}: {stderr.decode()}")
         return stdout.decode()

@@ -15,6 +15,7 @@ from horse_fish.agents.worktree import WorktreeManager
 from horse_fish.memory.lessons import LessonStore
 from horse_fish.memory.store import MemoryStore
 from horse_fish.models import Run
+from horse_fish.observability.log_context import setup_logging, warn_if_no_langfuse
 from horse_fish.observability.traces import Tracer
 from horse_fish.orchestrator.engine import Orchestrator
 from horse_fish.planner.decompose import Planner
@@ -144,6 +145,8 @@ class RunManager:
         """Main event loop. Polls for queued runs and dispatches up to max_concurrent."""
         self._running = True
         self._shutdown_event.clear()
+        setup_logging()
+        warn_if_no_langfuse()
         logger.info("RunManager started (max_concurrent=%d)", self._max_concurrent_runs)
 
         try:

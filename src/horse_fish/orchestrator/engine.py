@@ -14,7 +14,7 @@ from horse_fish.memory.lessons import LessonStore
 from horse_fish.memory.store import MemoryStore
 from horse_fish.merge.queue import MergeQueue
 from horse_fish.models import AgentState, Run, RunState, Subtask, SubtaskResult, SubtaskState
-from horse_fish.observability.log_context import clear_log_context, set_log_context
+from horse_fish.observability.log_context import clear_log_context, reset_log_context, set_log_context
 from horse_fish.observability.traces import Tracer
 from horse_fish.planner.decompose import Planner
 from horse_fish.planner.smart import SmartPlanner
@@ -581,6 +581,7 @@ class Orchestrator:
                     subtask.last_activity_at = datetime.now(UTC)
                     agent_map[subtask.id] = slot.id
                     active_count += 1
+                    set_log_context(subtask_id=subtask.id[:8], agent_id=slot.name)
                     self._persist_subtask(subtask, run.id)
                     if dispatch_span:
                         self._tracer.end_span(
@@ -692,6 +693,7 @@ class Orchestrator:
             if subtask.state != SubtaskState.done or not subtask.agent:
                 continue
             reviewed_subtasks += 1
+            set_log_context(subtask_id=subtask.id[:8])
 
             review_span = self._subtask_span("subtask.review", subtask)
             gate_retry_span = None
@@ -906,6 +908,7 @@ class Orchestrator:
             for subtask in run.subtasks:
                 if subtask.state != SubtaskState.done or not subtask.agent:
                     continue
+                set_log_context(subtask_id=subtask.id[:8])
                 slot = self._pool._get_slot(subtask.agent)
                 merge_span = self._subtask_span("subtask.merge_queue", subtask, branch=slot.branch)
                 await self._merge_queue.enqueue(subtask.id, slot.name, slot.branch)
@@ -928,6 +931,7 @@ class Orchestrator:
             for subtask in run.subtasks:
                 if subtask.state != SubtaskState.done or not subtask.agent:
                     continue
+                set_log_context(subtask_id=subtask.id[:8])
 
                 merge_span = None
                 try:
