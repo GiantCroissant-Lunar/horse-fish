@@ -68,11 +68,12 @@ class TracingMiddleware:
 
         span = self._tracer.span(ctx.trace, run.state.value)
         result = await next(run)
-        self._tracer.end_span(
-            span,
-            {"state": result.state.value},
-            metadata={"subtask_count": len(result.subtasks)},
-        )
+        if span:
+            self._tracer.end_span(
+                span,
+                {"state": result.state.value},
+                metadata={"subtask_count": len(result.subtasks)},
+            )
         return result
 
 
