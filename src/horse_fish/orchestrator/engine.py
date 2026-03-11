@@ -321,7 +321,7 @@ class Orchestrator:
         self._reset_trace_metrics()
 
         try:
-            while run.state not in (TaskState.completed, TaskState.failed):
+            while run.state not in (TaskState.completed, TaskState.failed, TaskState.partial_success):
                 handler = self._handlers.get(run.state)
                 if handler is None:
                     raise OrchestratorError(f"No handler for state {run.state}")

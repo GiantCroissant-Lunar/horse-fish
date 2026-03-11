@@ -18,6 +18,7 @@ def mock_pool():
     pool = AsyncMock()
     pool._get_slot = MagicMock()
     pool._worktrees = AsyncMock()
+    pool.check_status = AsyncMock(return_value=AgentState.dead)
     pool.runtime_observation_summary = MagicMock(
         return_value={
             "total_count": 0,
@@ -757,6 +758,7 @@ async def test_full_lifecycle_merge_conflict(orchestrator, mock_pool, mock_plann
 async def test_no_handler_for_state():
     """Test run() raises OrchestratorError for unhandled state."""
     mock_pool = AsyncMock()
+    mock_pool.check_status = AsyncMock(return_value=AgentState.dead)
     mock_planner = AsyncMock()
     mock_gates = AsyncMock()
     orchestrator = Orchestrator(

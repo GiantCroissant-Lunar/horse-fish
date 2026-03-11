@@ -214,8 +214,9 @@ class TestWorktreeManager:
         await proc.communicate()
 
         # Merge should succeed
-        result = await manager.merge("merge-test", auto_commit=False)
-        assert result is True
+        success, conflict_files = await manager.merge("merge-test", auto_commit=False)
+        assert success is True
+        assert conflict_files == []
 
         # Verify the file is in main
         assert (tmp_git_repo / "feature.txt").exists()
@@ -230,8 +231,9 @@ class TestWorktreeManager:
         (worktree_path / "uncommitted.txt").write_text("uncommitted content")
 
         # Merge with auto_commit should succeed
-        result = await manager.merge("auto-commit-test", auto_commit=True)
-        assert result is True
+        success, conflict_files = await manager.merge("auto-commit-test", auto_commit=True)
+        assert success is True
+        assert conflict_files == []
 
         # Verify file is in main
         assert (tmp_git_repo / "uncommitted.txt").exists()
@@ -308,8 +310,9 @@ class TestWorktreeManager:
         await proc.communicate()
 
         # Merge should fail due to conflict
-        result = await manager.merge("conflict-test", auto_commit=False)
-        assert result is False
+        success, conflict_files = await manager.merge("conflict-test", auto_commit=False)
+        assert success is False
+        assert len(conflict_files) > 0
 
         # We should still be on main
         proc = await asyncio.create_subprocess_exec(
