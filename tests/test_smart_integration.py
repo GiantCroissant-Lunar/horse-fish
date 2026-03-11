@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from horse_fish.memory.lessons import LessonStore
-from horse_fish.models import Run, RunState, Subtask, SubtaskResult, SubtaskState, TaskComplexity
+from horse_fish.models import Subtask, SubtaskResult, SubtaskState, Task, TaskComplexity, TaskState
 from horse_fish.planner.decompose import Planner
 from horse_fish.planner.smart import SmartPlanner
 from horse_fish.store.db import Store
@@ -42,8 +42,8 @@ def smart_planner(planner, lesson_store):
 async def test_lesson_round_trip(smart_planner, lesson_store, store):
     """Lessons from a completed run feed back into future planning."""
     # 1. Simulate a completed over-decomposed run
-    run = Run.create("Add version string to __init__.py")
-    run.state = RunState.completed
+    run = Task.create("Add version string to __init__.py")
+    run.state = TaskState.completed
     store.execute(
         "INSERT INTO runs (id, task, state, created_at) VALUES (?, ?, ?, ?)",
         (run.id, run.task, run.state.value, run.created_at.isoformat()),

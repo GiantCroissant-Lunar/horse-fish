@@ -13,7 +13,7 @@ from horse_fish.dispatch.selector import AgentSelector
 from horse_fish.memory.lessons import LessonStore
 from horse_fish.memory.store import MemoryStore
 from horse_fish.merge.queue import MergeQueue
-from horse_fish.models import AgentState, ContextBrief, Run, RunState, Subtask, SubtaskResult, SubtaskState
+from horse_fish.models import AgentState, ContextBrief, Subtask, SubtaskResult, SubtaskState, Task, TaskState
 from horse_fish.observability.log_context import clear_log_context, reset_log_context, set_log_context
 from horse_fish.observability.traces import Tracer
 from horse_fish.planner.decompose import Planner
@@ -56,7 +56,7 @@ class Orchestrator:
         lesson_store: LessonStore | None = None,
         cognee_memory: CogneeMemory | None = None,
         stall_timeout_seconds: int = STALL_TIMEOUT_SECONDS,
-        concurrency_limits: dict[RunState, int] | None = None,
+        concurrency_limits: dict[TaskState, int] | None = None,
         store: Store | None = None,
         allow_partial_success: bool = False,
     ) -> None:
@@ -88,12 +88,12 @@ class Orchestrator:
         self._gate_retry_exhausted = 0
         self._merge_conflicts: list[dict[str, object]] = []
         self._context_brief: ContextBrief | None = None
-        self._handlers: dict[RunState, _Handler] = {
-            RunState.scouting: self._scout,
-            RunState.planning: self._plan,
-            RunState.executing: self._execute,
-            RunState.reviewing: self._review,
-            RunState.merging: self._merge,
+        self._handlers: dict[TaskState, _Handler] = {
+            TaskState.scouting: self._scout,
+            TaskState.planning: self._plan,
+            TaskState.executing: self._execute,
+            TaskState.reviewing: self._review,
+            TaskState.merging: self._merge,
         }
 
     def _subtask_span(
@@ -139,7 +139,7 @@ class Orchestrator:
             }
         )
 
-    def _score_run_outcomes(self, run: Run, trace) -> None:
+    def _score_run_outcomes(self, run: Task, trace) -> None:
         """Emit run-level Langfuse scores after the state machine finishes."""
         if not self._tracer or not trace:
             return
@@ -151,7 +151,7 @@ class Orchestrator:
         self._tracer.score_trace(
             trace,
             "run_success",
-            1.0 if run.state == RunState.completed else 0.0,
+            1.0 if run.state == TaskState.completed else 0.0,
             data_type="NUMERIC",
             metadata={"status": run.state.value},
         )
@@ -248,7 +248,7 @@ class Orchestrator:
             },
         )
 
-    def _trace_output(self, run: Run) -> dict[str, Any]:
+    def _trace_output(self, run: Task) -> dict[str, Any]:
         """Build the final trace output payload."""
         runtime_summary = self._pool.runtime_observation_summary(run.id)
         return {
@@ -267,7 +267,7 @@ class Orchestrator:
             },
         }
 
-    def _persist_run(self, run: Run) -> None:
+    def _persist_run(self, run: Task) -> None:
         """Persist run state to SQLite."""
         if not self._store:
             return
@@ -295,9 +295,9 @@ class Orchestrator:
             created_at=datetime.now(UTC).isoformat(),
         )
 
-    async def run(self, task: str) -> Run:
+    async def run(self, task: str) -> Task:
         """Create a Run and drive it through the state machine until terminal."""
-        run = Run.create(task)
+        run = Task.create(task)
         self._persist_run(run)
         # Set logging context for the run
         context_tokens = set_log_context(run_id=run.id)
@@ -321,7 +321,7 @@ class Orchestrator:
         self._reset_trace_metrics()
 
         try:
-            while run.state not in (RunState.completed, RunState.failed):
+            while run.state not in (TaskState.completed, TaskState.failed):
                 handler = self._handlers.get(run.state)
                 if handler is None:
                     raise OrchestratorError(f"No handler for state {run.state}")
@@ -338,7 +338,7 @@ class Orchestrator:
                 self._persist_run(run)
                 logger.info("Run %s transitioned to %s", run.id, run.state)
                 # Update context if transitioning between subtasks
-                if run.state == RunState.executing:
+                if run.state == TaskState.executing:
                     clear_log_context()
                     set_log_context(run_id=run.id)
         finally:
@@ -356,12 +356,12 @@ class Orchestrator:
                     output=self._trace_output(run),
                 )
             self._active_trace = None
-        if run.state == RunState.completed:
+        if run.state == TaskState.completed:
             await self._learn(run)
 
         return run
 
-    async def _learn(self, run: Run) -> None:
+    async def _learn(self, run: Task) -> None:
         """Store completed run results in memory for future learning."""
         subtask_results = [s.result for s in run.subtasks if s.result]
 
@@ -411,7 +411,7 @@ class Orchestrator:
             except Exception as exc:
                 logger.warning("Failed to extract lessons: %s", exc)
 
-    def _stamp_provenance(self, result: SubtaskResult, run: Run, agent_id: str) -> None:
+    def _stamp_provenance(self, result: SubtaskResult, run: Task, agent_id: str) -> None:
         """Stamp provenance metadata on a SubtaskResult."""
         try:
             slot = self._pool._get_slot(agent_id)
@@ -423,7 +423,7 @@ class Orchestrator:
         result.run_id = run.id
         result.completed_at = datetime.now(UTC)
 
-    async def _check_stalls(self, run: Run, agent_map: dict[str, str]) -> int:
+    async def _check_stalls(self, run: Task, agent_map: dict[str, str]) -> int:
         """Check for stalled agents. Returns count of subtasks no longer running (retried + failed)."""
         retried = 0
         failed = 0
@@ -501,7 +501,7 @@ class Orchestrator:
 
         return retried + failed
 
-    async def _scout(self, run: Run) -> Run:
+    async def _scout(self, run: Task) -> Task:
         """Gather codebase context by spawning a scout agent.
 
         Spawns a real agent that explores the codebase and produces a ContextBrief.
@@ -524,10 +524,10 @@ class Orchestrator:
                 len(brief.patterns),
                 len(brief.acceptance_criteria),
             )
-        run.state = RunState.planning
+        run.state = TaskState.planning
         return run
 
-    async def _run_agent_scout(self, run: Run) -> ContextBrief | None:
+    async def _run_agent_scout(self, run: Task) -> ContextBrief | None:
         """Spawn a scout agent, send the scout prompt, wait for output, parse brief."""
         import shutil
         from pathlib import Path
@@ -614,7 +614,7 @@ class Orchestrator:
                 except Exception:
                     pass
 
-    async def _plan(self, run: Run) -> Run:
+    async def _plan(self, run: Task) -> Task:
         """Decompose the task into subtasks via the Planner."""
         brief = self._context_brief
         try:
@@ -625,12 +625,12 @@ class Orchestrator:
                 subtasks = await self._planner.decompose(run.task)
         except Exception as exc:
             logger.error("Planning failed: %s", exc)
-            run.state = RunState.failed
+            run.state = TaskState.failed
             return run
 
         if not subtasks:
             logger.error("Planner returned no subtasks")
-            run.state = RunState.failed
+            run.state = TaskState.failed
             return run
 
         # Convert description-based deps to ID-based deps
@@ -640,11 +640,11 @@ class Orchestrator:
         # Persist initial subtasks
         for subtask in subtasks:
             self._persist_subtask(subtask, run.id)
-        run.state = RunState.executing
+        run.state = TaskState.executing
         self._persist_run(run)
         return run
 
-    async def _execute(self, run: Run) -> Run:
+    async def _execute(self, run: Task) -> Task:
         """Dispatch subtasks to agents and poll until all complete or fail."""
         agent_map: dict[str, str] = {}  # subtask_id → agent_id
         active_count = 0
@@ -660,7 +660,7 @@ class Orchestrator:
             for subtask in run.subtasks:
                 if subtask.state != SubtaskState.pending:
                     continue
-                max_concurrent = self._concurrency_limits.get(RunState.executing, self._max_agents)
+                max_concurrent = self._concurrency_limits.get(TaskState.executing, self._max_agents)
                 if active_count >= max_concurrent:
                     break
                 if not self._deps_met(run, subtask):
@@ -731,7 +731,7 @@ class Orchestrator:
                 s.state == SubtaskState.pending and self._deps_met(run, s) for s in run.subtasks
             ):
                 logger.error("No subtasks running and none can be dispatched — deadlock")
-                run.state = RunState.failed
+                run.state = TaskState.failed
                 return run
 
             # Poll running subtasks
@@ -807,13 +807,13 @@ class Orchestrator:
                     len(succeeded),
                 )
             else:
-                run.state = RunState.failed
+                run.state = TaskState.failed
                 return run
 
-        run.state = RunState.reviewing
+        run.state = TaskState.reviewing
         return run
 
-    async def _review(self, run: Run) -> Run:
+    async def _review(self, run: Task) -> Task:
         """Run validation gates on each completed subtask's worktree.
 
         If gates fail and the agent is alive with retries remaining,
@@ -1032,23 +1032,23 @@ class Orchestrator:
             )
 
         if needs_re_execute:
-            run.state = RunState.executing
+            run.state = TaskState.executing
             return run
 
         if all_passed:
-            run.state = RunState.merging
+            run.state = TaskState.merging
         elif self._allow_partial_success and passed_subtasks > 0:
             logger.warning(
                 "Partial success review: %d passed, %d failed gates — continuing to merge",
                 passed_subtasks,
                 failed_subtasks,
             )
-            run.state = RunState.merging
+            run.state = TaskState.merging
         else:
-            run.state = RunState.failed
+            run.state = TaskState.failed
         return run
 
-    async def _merge(self, run: Run) -> Run:
+    async def _merge(self, run: Task) -> Task:
         """Merge each subtask's worktree branch into main."""
         if self._merge_queue:
             # Use merge queue: enqueue all subtasks, then process
@@ -1074,10 +1074,10 @@ class Orchestrator:
                     )
                     merge_failures += 1
                     if not self._allow_partial_success:
-                        run.state = RunState.failed
+                        run.state = TaskState.failed
                         return run
             if merge_failures and not self._allow_partial_success:
-                run.state = RunState.failed
+                run.state = TaskState.failed
                 return run
         else:
             # Fallback: direct merge without queue
@@ -1096,7 +1096,7 @@ class Orchestrator:
                         self._record_merge_conflict(subtask.id, branch=slot.branch, conflict_files=conflict_files)
                         subtask.state = SubtaskState.failed
                         if not self._allow_partial_success:
-                            run.state = RunState.failed
+                            run.state = TaskState.failed
                             if merge_span:
                                 self._tracer.end_span(
                                     merge_span,
@@ -1118,7 +1118,7 @@ class Orchestrator:
                     logger.error("Merge failed for subtask %s: %s", subtask.id, exc)
                     subtask.state = SubtaskState.failed
                     if not self._allow_partial_success:
-                        run.state = RunState.failed
+                        run.state = TaskState.failed
                         if self._tracer and merge_span:
                             self._tracer.end_span(
                                 merge_span,
@@ -1129,11 +1129,11 @@ class Orchestrator:
                         return run
 
         has_failures = any(s.state == SubtaskState.failed for s in run.subtasks)
-        run.state = RunState.partial_success if (has_failures and self._allow_partial_success) else RunState.completed
+        run.state = TaskState.partial_success if (has_failures and self._allow_partial_success) else TaskState.completed
         return run
 
     @staticmethod
-    def _deps_met(run: Run, subtask) -> bool:
+    def _deps_met(run: Task, subtask) -> bool:
         """Check if all dependencies of a subtask are done."""
         if not subtask.deps:
             return True

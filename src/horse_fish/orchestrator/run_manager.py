@@ -14,7 +14,7 @@ from horse_fish.agents.tmux import TmuxManager
 from horse_fish.agents.worktree import WorktreeManager
 from horse_fish.memory.lessons import LessonStore
 from horse_fish.memory.store import MemoryStore
-from horse_fish.models import Run
+from horse_fish.models import Task
 from horse_fish.observability.log_context import setup_logging, warn_if_no_langfuse
 from horse_fish.observability.traces import Tracer
 from horse_fish.orchestrator.engine import Orchestrator
@@ -103,7 +103,7 @@ class RunManager:
 
         self._store = Store(db_path)
         self._store.migrate()
-        self._active_tasks: dict[str, asyncio.Task[Run]] = {}
+        self._active_tasks: dict[str, asyncio.Task[Task]] = {}
         self._running = False
         self._shutdown_event = asyncio.Event()
 
@@ -247,7 +247,7 @@ class RunManager:
             task = asyncio.create_task(self._run_orchestrator(run_id, task_desc))
             self._active_tasks[run_id] = task
 
-    async def _run_orchestrator(self, run_id: str, task_desc: str) -> Run:
+    async def _run_orchestrator(self, run_id: str, task_desc: str) -> Task:
         """Run an orchestrator for a single run."""
         orchestrator, store, pool = create_orchestrator(
             db_path=self._db_path,

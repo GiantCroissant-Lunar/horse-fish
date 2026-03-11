@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from horse_fish.models import Run, SubtaskResult
+from horse_fish.models import SubtaskResult, Task
 from horse_fish.store.db import Store
 
 
@@ -276,7 +276,7 @@ class MemoryStore:
             ids,
         )
 
-    async def store_run_result(self, run: Run, subtask_results: list[SubtaskResult]) -> None:
+    async def store_run_result(self, run: Task, subtask_results: list[SubtaskResult]) -> None:
         """Store a completed run's results for future learning.
 
         Args:

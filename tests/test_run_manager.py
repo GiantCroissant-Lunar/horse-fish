@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-from horse_fish.models import Run, RunState
+from horse_fish.models import Task, TaskState
 from horse_fish.orchestrator.run_manager import RunManager, create_orchestrator
 from horse_fish.store.db import Store
 
@@ -217,8 +217,8 @@ class TestMaxConcurrent:
             async with lock:
                 active_count -= 1
             # Return a mock run
-            run = Run.create(task_desc)
-            run.state = RunState.completed
+            run = Task.create(task_desc)
+            run.state = TaskState.completed
             run.completed_at = datetime.now(UTC)
             return run
 
@@ -269,8 +269,8 @@ class TestMaxConcurrent:
                 await asyncio.sleep(0.15)
             active_count -= 1
             completed_runs.append(run_id)
-            run = Run.create(task_desc)
-            run.state = RunState.completed
+            run = Task.create(task_desc)
+            run.state = TaskState.completed
             run.completed_at = datetime.now(UTC)
             return run
 
@@ -315,8 +315,8 @@ class TestStartStop:
             except asyncio.CancelledError:
                 cancelled_tasks.append(run_id)
                 raise
-            run = Run.create(task_desc)
-            run.state = RunState.completed
+            run = Task.create(task_desc)
+            run.state = TaskState.completed
             return run
 
         manager = RunManager(db_path=tmp_db, max_concurrent_runs=2)

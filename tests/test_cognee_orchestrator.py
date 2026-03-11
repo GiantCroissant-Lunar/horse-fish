@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from horse_fish.models import Run, Subtask, SubtaskResult
+from horse_fish.models import Subtask, SubtaskResult, Task
 
 
 class TestOrchestratorLearnPhase:
@@ -29,7 +29,7 @@ class TestOrchestratorLearnPhase:
             memory=mock_memvid,
         )
 
-        run = Run.create(task="test task")
+        run = Task.create(task="test task")
         run.state = "completed"
         run.completed_at = datetime.now(UTC)
         run.subtasks = [Subtask.create("sub1")]
@@ -62,7 +62,7 @@ class TestOrchestratorLearnPhase:
             cognee_memory=mock_cognee,
         )
 
-        run = Run.create(task="test task")
+        run = Task.create(task="test task")
         run.state = "completed"
         run.completed_at = datetime.now(UTC)
         run.subtasks = []
@@ -88,7 +88,7 @@ class TestOrchestratorLearnPhase:
             memory=mock_memvid,
         )
 
-        run = Run.create(task="test task")
+        run = Task.create(task="test task")
         run.state = "completed"
         run.completed_at = datetime.now(UTC)
         run.subtasks = [Subtask.create("sub1")]

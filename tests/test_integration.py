@@ -13,7 +13,7 @@ import pytest
 from horse_fish.agents.pool import AgentPool
 from horse_fish.agents.tmux import TmuxManager
 from horse_fish.agents.worktree import WorktreeManager
-from horse_fish.models import AgentSlot, AgentState, RunState, Subtask, SubtaskResult, SubtaskState
+from horse_fish.models import AgentSlot, AgentState, Subtask, SubtaskResult, SubtaskState, TaskState
 from horse_fish.orchestrator.engine import Orchestrator
 from horse_fish.planner.decompose import Planner
 from horse_fish.store.db import Store
@@ -142,7 +142,7 @@ async def test_orchestrator_full_lifecycle_success(orchestrator: Orchestrator, m
     """Test full lifecycle: plan → execute → review → merge → completed."""
     run = await orchestrator.run("build feature X")
 
-    assert run.state == RunState.completed
+    assert run.state == TaskState.completed
     assert len(run.subtasks) == 2
     assert all(s.state == SubtaskState.done for s in run.subtasks)
     assert run.completed_at is not None
@@ -165,7 +165,7 @@ async def test_orchestrator_respects_dependency_ordering(orchestrator: Orchestra
 
     run = await orchestrator.run("build feature X")
 
-    assert run.state == RunState.completed
+    assert run.state == TaskState.completed
 
     # Subtask A should have been dispatched before subtask B
     # (This is implicit in the dependency checking logic)
@@ -192,7 +192,7 @@ async def test_orchestrator_planner_error(mock_pool: MagicMock, mock_gates: Magi
 
     run = await orchestrator.run("build feature X")
 
-    assert run.state == RunState.failed
+    assert run.state == TaskState.failed
     assert len(run.subtasks) == 0
 
 
@@ -211,7 +211,7 @@ async def test_orchestrator_planner_empty_subtasks(mock_pool: MagicMock, mock_ga
 
     run = await orchestrator.run("build feature X")
 
-    assert run.state == RunState.failed
+    assert run.state == TaskState.failed
     assert len(run.subtasks) == 0
 
 
@@ -239,7 +239,7 @@ async def test_orchestrator_gate_failure(mock_pool: MagicMock, mock_planner: Mag
 
     run = await orchestrator.run("build feature X")
 
-    assert run.state == RunState.failed
+    assert run.state == TaskState.failed
 
     # At least one subtask should have failed due to gates
     failed_subtasks = [s for s in run.subtasks if s.state == SubtaskState.failed]
@@ -262,7 +262,7 @@ async def test_orchestrator_merge_conflict(
 
     run = await orchestrator.run("build feature X")
 
-    assert run.state == RunState.failed
+    assert run.state == TaskState.failed
 
     # At least one subtask should have failed due to merge
     failed_subtasks = [s for s in run.subtasks if s.state == SubtaskState.failed]
@@ -286,7 +286,7 @@ async def test_orchestrator_agent_spawn_failure(mock_planner: MagicMock, mock_ga
 
     run = await orchestrator.run("build feature X")
 
-    assert run.state == RunState.failed
+    assert run.state == TaskState.failed
 
     # At least one subtask should have failed due to spawn failure
     # (The run fails immediately after the first spawn failure due to deadlock detection)
@@ -390,7 +390,7 @@ async def test_orchestrator_with_real_store(tmp_path: Path) -> None:
 
         run = await orchestrator.run("real store test")
 
-        assert run.state == RunState.completed
+        assert run.state == TaskState.completed
         assert len(run.subtasks) == 2
 
     store.close()

@@ -10,7 +10,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from horse_fish.models import Run, SubtaskResult
+from horse_fish.models import SubtaskResult, Task
 
 logger = logging.getLogger(__name__)
 
@@ -208,7 +208,7 @@ class CogneeMemory:
         """Search the Cognee knowledge graph using GRAPH_COMPLETION."""
         return await self._search_cognee(query, top_k=top_k)
 
-    async def ingest_run_result(self, run: Run, subtask_results: list[SubtaskResult]) -> None:
+    async def ingest_run_result(self, run: Task, subtask_results: list[SubtaskResult]) -> None:
         """Ingest a completed run into the knowledge graph using structured node_sets.
 
         Ingests: (1) task summary to task_summaries node_set, (2) subtask outcomes

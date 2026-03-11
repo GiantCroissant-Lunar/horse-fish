@@ -127,8 +127,3 @@ class Task(BaseModel):
     @classmethod
     def create(cls, task: str) -> Task:
         return cls(id=str(uuid.uuid4()), task=task)
-
-
-# Backward compatibility aliases — remove after full migration
-Run = Task
-RunState = TaskState

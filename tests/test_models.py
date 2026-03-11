@@ -5,12 +5,12 @@ from datetime import UTC, datetime
 from horse_fish.models import (
     AgentSlot,
     AgentState,
-    Run,
-    RunState,
     Subtask,
     SubtaskResult,
     SubtaskState,
+    Task,
     TaskComplexity,
+    TaskState,
 )
 
 
@@ -33,14 +33,14 @@ class TestSubtaskState:
         assert SubtaskState.escalated == "escalated"
 
 
-class TestRunState:
+class TestTaskState:
     def test_values(self):
-        assert RunState.planning == "planning"
-        assert RunState.executing == "executing"
-        assert RunState.reviewing == "reviewing"
-        assert RunState.merging == "merging"
-        assert RunState.completed == "completed"
-        assert RunState.failed == "failed"
+        assert TaskState.planning == "planning"
+        assert TaskState.executing == "executing"
+        assert TaskState.reviewing == "reviewing"
+        assert TaskState.merging == "merging"
+        assert TaskState.completed == "completed"
+        assert TaskState.failed == "failed"
 
 
 class TestTaskComplexity:
@@ -224,81 +224,81 @@ class TestSubtask:
         assert st.last_activity_at == now
 
 
-class TestRun:
+class TestTask:
     def test_create_factory(self):
-        run = Run.create("build the feature")
+        run = Task.create("build the feature")
         assert run.task == "build the feature"
         assert isinstance(run.id, str)
         assert len(run.id) == 36
-        assert run.state == RunState.scouting
+        assert run.state == TaskState.scouting
         assert run.subtasks == []
         assert isinstance(run.created_at, datetime)
         assert run.completed_at is None
 
     def test_unique_ids(self):
-        r1 = Run.create("task a")
-        r2 = Run.create("task b")
+        r1 = Task.create("task a")
+        r2 = Task.create("task b")
         assert r1.id != r2.id
 
     def test_add_subtasks(self):
-        run = Run.create("multi-step task")
+        run = Task.create("multi-step task")
         run.subtasks.append(Subtask.create("step 1"))
         run.subtasks.append(Subtask.create("step 2"))
         assert len(run.subtasks) == 2
 
     def test_state_transitions(self):
-        run = Run.create("workflow")
-        assert run.state == RunState.scouting
-        run.state = RunState.executing
-        assert run.state == RunState.executing
-        run.state = RunState.completed
+        run = Task.create("workflow")
+        assert run.state == TaskState.scouting
+        run.state = TaskState.executing
+        assert run.state == TaskState.executing
+        run.state = TaskState.completed
 
     def test_serialization_roundtrip(self):
-        run = Run.create("serialize test")
+        run = Task.create("serialize test")
         run.subtasks.append(Subtask.create("sub1"))
         data = run.model_dump()
         assert data["state"] == "scouting"
         assert len(data["subtasks"]) == 1
-        restored = Run.model_validate(data)
+        restored = Task.model_validate(data)
         assert restored.id == run.id
         assert restored.task == run.task
         assert len(restored.subtasks) == 1
         assert restored.subtasks[0].description == "sub1"
 
     def test_completed_at(self):
-        run = Run.create("final task")
+        run = Task.create("final task")
         now = datetime.now(UTC)
         run.completed_at = now
-        run.state = RunState.completed
+        run.state = TaskState.completed
         assert run.completed_at == now
 
     def test_complexity_field_default(self):
-        run = Run.create("test task")
+        run = Task.create("test task")
         assert run.complexity is None
 
     def test_complexity_field_explicit(self):
-        run = Run.create("complex task")
+        run = Task.create("complex task")
         run.complexity = TaskComplexity.squad
         assert run.complexity == TaskComplexity.squad
 
     def test_lessons_field_default(self):
-        run = Run.create("learning task")
+        run = Task.create("learning task")
         assert run.lessons == []
 
     def test_lessons_field_append(self):
-        run = Run.create("learning task")
+        run = Task.create("learning task")
         run.lessons.append("Lesson 1")
         run.lessons.append("Lesson 2")
         assert len(run.lessons) == 2
         assert run.lessons == ["Lesson 1", "Lesson 2"]
 
     def test_serialization_with_new_fields(self):
-        run = Run.create("serialize test")
+        run = Task.create("serialize test")
         run.complexity = TaskComplexity.trio
         run.lessons.append("Learned something")
         data = run.model_dump()
         assert data["complexity"] == "TRIO"
         assert data["lessons"] == ["Learned something"]
-        restored = Run.model_validate(data)
+        restored = Task.model_validate(data)
         assert restored.complexity == TaskComplexity.trio
         assert restored.lessons == ["Learned something"]

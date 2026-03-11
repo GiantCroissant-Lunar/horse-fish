@@ -8,7 +8,7 @@ import pytest
 from click.testing import CliRunner
 
 from horse_fish.cli import main
-from horse_fish.models import Run, RunState, Subtask, SubtaskState
+from horse_fish.models import Subtask, SubtaskState, Task, TaskState
 
 
 @pytest.fixture
@@ -18,8 +18,8 @@ def runner():
 
 @pytest.fixture
 def mock_run():
-    run = Run.create("test task")
-    run.state = RunState.completed
+    run = Task.create("test task")
+    run.state = TaskState.completed
     run.subtasks = [
         Subtask(id="1", description="Subtask 1", state=SubtaskState.done),
         Subtask(id="2", description="Subtask 2", state=SubtaskState.done),

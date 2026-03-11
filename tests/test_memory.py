@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from horse_fish.memory.store import MemoryEntry, MemoryHit, MemoryStore
-from horse_fish.models import Run, Subtask, SubtaskResult
+from horse_fish.models import Subtask, SubtaskResult, Task
 from horse_fish.store.db import Store
 
 
@@ -78,9 +78,9 @@ def mock_memvid_module():
 
 
 @pytest.fixture
-def sample_run() -> Run:
+def sample_run() -> Task:
     """Create a sample Run object."""
-    run = Run.create(task="Build a memory module")
+    run = Task.create(task="Build a memory module")
     run.subtasks = [
         Subtask.create("Create store.py"),
         Subtask.create("Write tests"),
@@ -202,7 +202,7 @@ class TestMemoryStore:
 
     @pytest.mark.asyncio
     async def test_store_run_result(
-        self, temp_data_dir: Path, mock_memvid_module, sample_run: Run, sample_subtask_results: list[SubtaskResult]
+        self, temp_data_dir: Path, mock_memvid_module, sample_run: Task, sample_subtask_results: list[SubtaskResult]
     ):
         """Test storing run results."""
         store = MemoryStore(data_dir=temp_data_dir)

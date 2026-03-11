@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from horse_fish.models import AgentSlot, AgentState, Run, RunState, Subtask, SubtaskResult, SubtaskState
+from horse_fish.models import AgentSlot, AgentState, Subtask, SubtaskResult, SubtaskState, Task, TaskState
 from horse_fish.orchestrator.engine import Orchestrator
 
 
@@ -68,9 +68,9 @@ def _make_orchestrator(mock_pool, mock_planner, mock_gates, *, allow_partial_suc
 
 
 def test_partial_success_state_in_enum():
-    """RunState.partial_success exists and has the expected value."""
-    assert RunState.partial_success == "partial_success"
-    assert RunState.partial_success in list(RunState)
+    """TaskState.partial_success exists and has the expected value."""
+    assert TaskState.partial_success == "partial_success"
+    assert TaskState.partial_success in list(TaskState)
 
 
 @pytest.mark.asyncio
@@ -89,9 +89,9 @@ async def test_partial_success_mode_succeeds_with_some_failures(mock_pool, mock_
     s2.agent = "agent-2"
     s2.last_activity_at = datetime.now(UTC) - timedelta(seconds=60)  # Stalled, will fail
 
-    run = Run.create("test task")
+    run = Task.create("test task")
     run.subtasks = [s1, s2]
-    run.state = RunState.executing
+    run.state = TaskState.executing
 
     mock_pool.release = AsyncMock()
     mock_pool.check_status = AsyncMock(return_value=AgentState.busy)
@@ -105,7 +105,7 @@ async def test_partial_success_mode_succeeds_with_some_failures(mock_pool, mock_
         result = await orch._execute(run)
 
     # Should transition to reviewing (partial success), not failed
-    assert result.state == RunState.reviewing
+    assert result.state == TaskState.reviewing
     assert s1.state == SubtaskState.done
     assert s2.state == SubtaskState.failed
 
@@ -125,9 +125,9 @@ async def test_partial_success_disabled_fails_on_any_failure(mock_pool, mock_pla
     s2.agent = "agent-2"
     s2.last_activity_at = datetime.now(UTC) - timedelta(seconds=60)
 
-    run = Run.create("test task")
+    run = Task.create("test task")
     run.subtasks = [s1, s2]
-    run.state = RunState.executing
+    run.state = TaskState.executing
 
     mock_pool.release = AsyncMock()
     mock_pool.check_status = AsyncMock(return_value=AgentState.busy)
@@ -140,7 +140,7 @@ async def test_partial_success_disabled_fails_on_any_failure(mock_pool, mock_pla
         m.setattr("horse_fish.orchestrator.engine.asyncio.sleep", mock_sleep)
         result = await orch._execute(run)
 
-    assert result.state == RunState.failed
+    assert result.state == TaskState.failed
 
 
 @pytest.mark.asyncio
@@ -158,9 +158,9 @@ async def test_partial_success_all_failed_still_fails(mock_pool, mock_planner, m
     s2.agent = "agent-2"
     s2.last_activity_at = datetime.now(UTC) - timedelta(seconds=60)
 
-    run = Run.create("test task")
+    run = Task.create("test task")
     run.subtasks = [s1, s2]
-    run.state = RunState.executing
+    run.state = TaskState.executing
 
     mock_pool.release = AsyncMock()
     mock_pool.check_status = AsyncMock(return_value=AgentState.busy)
@@ -174,7 +174,7 @@ async def test_partial_success_all_failed_still_fails(mock_pool, mock_planner, m
         result = await orch._execute(run)
 
     # All failed — even with partial success, should be failed
-    assert result.state == RunState.failed
+    assert result.state == TaskState.failed
     assert s1.state == SubtaskState.failed
     assert s2.state == SubtaskState.failed
 
@@ -197,9 +197,9 @@ async def test_partial_success_review_continues_with_passed_subtasks(mock_pool, 
     s2.gate_retry_count = 1
     s2.max_gate_retries = 1  # Exhausted
 
-    run = Run.create("test task")
+    run = Task.create("test task")
     run.subtasks = [s1, s2]
-    run.state = RunState.reviewing
+    run.state = TaskState.reviewing
 
     slot1 = AgentSlot(
         id="agent-1",
@@ -248,7 +248,7 @@ async def test_partial_success_review_continues_with_passed_subtasks(mock_pool, 
     result = await orch._review(run)
 
     # Should proceed to merging, not fail
-    assert result.state == RunState.merging
+    assert result.state == TaskState.merging
     assert s1.state == SubtaskState.done
     assert s2.state == SubtaskState.failed
 
@@ -266,9 +266,9 @@ async def test_partial_success_merge_skips_failed_subtasks(mock_pool, mock_plann
     s2.state = SubtaskState.failed  # Already failed
     s2.agent = "agent-2"
 
-    run = Run.create("test task")
+    run = Task.create("test task")
     run.subtasks = [s1, s2]
-    run.state = RunState.merging
+    run.state = TaskState.merging
 
     slot1 = AgentSlot(
         id="agent-1",
@@ -286,6 +286,6 @@ async def test_partial_success_merge_skips_failed_subtasks(mock_pool, mock_plann
     result = await orch._merge(run)
 
     # Should be partial_success since s2 is failed
-    assert result.state == RunState.partial_success
+    assert result.state == TaskState.partial_success
     # Only s1 should have been merged (s2 is failed, skipped by the loop condition)
     mock_pool._worktrees.merge.assert_called_once_with("hf-s1")

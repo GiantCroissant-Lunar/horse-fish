@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from horse_fish.memory.lessons import Lesson, LessonStore
-from horse_fish.models import Run, RunState, Subtask, SubtaskResult, SubtaskState
+from horse_fish.models import Subtask, SubtaskResult, SubtaskState, Task, TaskState
 from horse_fish.store.db import Store
 
 
@@ -42,8 +42,8 @@ def test_lesson_creation():
 
 def test_extract_over_decomposition(lesson_store):
     """Detects when subtask count >> files touched."""
-    run = Run.create("Add version string to __init__.py")
-    run.state = RunState.completed
+    run = Task.create("Add version string to __init__.py")
+    run.state = TaskState.completed
     run.subtasks = [
         Subtask(
             id="s1",
@@ -79,8 +79,8 @@ def test_extract_over_decomposition(lesson_store):
 
 def test_no_over_decomposition_for_single_subtask(lesson_store):
     """Single subtask run should not flag over-decomposition."""
-    run = Run.create("Simple task")
-    run.state = RunState.completed
+    run = Task.create("Simple task")
+    run.state = TaskState.completed
     run.subtasks = [
         Subtask(
             id="s1",
@@ -102,8 +102,8 @@ def test_no_over_decomposition_for_single_subtask(lesson_store):
 
 def test_extract_stall_lesson(lesson_store):
     """Detects subtasks that were retried due to stalls."""
-    run = Run.create("Some task")
-    run.state = RunState.completed
+    run = Task.create("Some task")
+    run.state = TaskState.completed
     run.subtasks = [
         Subtask(
             id="s1",
@@ -127,8 +127,8 @@ def test_extract_stall_lesson(lesson_store):
 
 def test_extract_no_diff_lesson(lesson_store):
     """Detects when agent reports success but produces no diff."""
-    run = Run.create("Some task")
-    run.state = RunState.completed
+    run = Task.create("Some task")
+    run.state = TaskState.completed
     run.subtasks = [
         Subtask(
             id="s1",

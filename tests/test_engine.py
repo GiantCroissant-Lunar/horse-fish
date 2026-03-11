@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from horse_fish.models import AgentSlot, AgentState, Run, RunState, Subtask, SubtaskResult, SubtaskState
+from horse_fish.models import AgentSlot, AgentState, Subtask, SubtaskResult, SubtaskState, Task, TaskState
 from horse_fish.orchestrator.engine import Orchestrator
 from horse_fish.store.db import Store
 
@@ -94,9 +94,9 @@ async def test_check_stalls_returns_retried_plus_failed_count(mock_pool, mock_pl
     subtask_fail.agent = "agent-2"
     subtask_fail.last_activity_at = datetime.now(UTC) - timedelta(seconds=60)  # Stalled
 
-    run = Run.create("Test run")
+    run = Task.create("Test run")
     run.subtasks = [subtask_retry, subtask_fail]
-    run.state = RunState.executing
+    run.state = TaskState.executing
 
     agent_map = {"subtask-retry": "agent-1", "subtask-fail": "agent-2"}
     mock_pool.release = AsyncMock()
@@ -123,9 +123,9 @@ async def test_execute_decrements_active_count_on_retry(orchestrator, mock_pool)
     subtask2 = Subtask(id="subtask-2", description="Task 2")
     subtask2.state = SubtaskState.pending
 
-    run = Run.create("Test run")
+    run = Task.create("Test run")
     run.subtasks = [subtask1, subtask2]
-    run.state = RunState.executing
+    run.state = TaskState.executing
 
     # Mock pool to spawn only one agent initially (at concurrency limit)
     slot1 = AgentSlot(
@@ -166,7 +166,7 @@ async def test_execute_decrements_active_count_on_retry(orchestrator, mock_pool)
         result = await orchestrator._execute(run)
 
     # Both subtasks should complete successfully
-    assert result.state == RunState.reviewing
+    assert result.state == TaskState.reviewing
     assert subtask1.state == SubtaskState.done
     assert subtask2.state == SubtaskState.done
 
@@ -184,9 +184,9 @@ async def test_execute_decrements_active_count_on_exhausted_retry(orchestrator, 
     subtask2 = Subtask(id="subtask-2", description="Task 2")
     subtask2.state = SubtaskState.pending
 
-    run = Run.create("Test run")
+    run = Task.create("Test run")
     run.subtasks = [subtask1, subtask2]
-    run.state = RunState.executing
+    run.state = TaskState.executing
 
     # Mock pool
     slot = AgentSlot(
@@ -223,7 +223,7 @@ async def test_execute_decrements_active_count_on_exhausted_retry(orchestrator, 
         result = await orchestrator._execute(run)
 
     # subtask1 should be failed (stall detected, no retries), subtask2 should be done
-    assert result.state == RunState.failed
+    assert result.state == TaskState.failed
     assert subtask1.state == SubtaskState.failed
     assert subtask2.state == SubtaskState.done
 
@@ -240,9 +240,9 @@ async def test_execute_no_deadlock_at_concurrency_limit_with_retry(orchestrator,
     subtask2 = Subtask(id="subtask-2", description="Task 2")
     subtask2.state = SubtaskState.pending
 
-    run = Run.create("Test run")
+    run = Task.create("Test run")
     run.subtasks = [subtask1, subtask2]
-    run.state = RunState.executing
+    run.state = TaskState.executing
 
     # Mock pool - can spawn 2 agents total
     slot1 = AgentSlot(
@@ -282,7 +282,7 @@ async def test_execute_no_deadlock_at_concurrency_limit_with_retry(orchestrator,
         result = await orchestrator._execute(run)
 
     # Should NOT deadlock - both tasks should complete
-    assert result.state == RunState.reviewing
+    assert result.state == TaskState.reviewing
     assert subtask1.state == SubtaskState.done
     assert subtask2.state == SubtaskState.done
 
@@ -303,9 +303,9 @@ async def test_check_stalls_removes_failed_from_agent_map(mock_pool, mock_planne
     subtask.agent = "agent-1"
     subtask.last_activity_at = datetime.now(UTC) - timedelta(seconds=60)  # Stalled
 
-    run = Run.create("Test run")
+    run = Task.create("Test run")
     run.subtasks = [subtask]
-    run.state = RunState.executing
+    run.state = TaskState.executing
 
     agent_map = {"subtask-1": "agent-1"}
     mock_pool.release = AsyncMock()
@@ -498,9 +498,9 @@ async def test_review_calls_auto_fix_before_run_all(orchestrator, mock_pool, moc
     subtask.state = SubtaskState.done
     subtask.agent = "agent-1"
 
-    run = Run.create("test task")
+    run = Task.create("test task")
     run.subtasks = [subtask]
-    run.state = RunState.reviewing
+    run.state = TaskState.reviewing
 
     slot = AgentSlot(
         id="agent-1",
@@ -530,7 +530,7 @@ async def test_review_calls_auto_fix_before_run_all(orchestrator, mock_pool, moc
 
     result = await orchestrator._review(run)
 
-    assert result.state == RunState.merging
+    assert result.state == TaskState.merging
     assert call_order == ["auto_fix_and_commit", "run_all"]
     mock_gates.auto_fix_and_commit.assert_called_once_with("/tmp/test-worktree")
     mock_gates.run_all.assert_called_once_with("/tmp/test-worktree")
@@ -547,9 +547,9 @@ async def test_review_retries_on_gate_failure(orchestrator, mock_pool, mock_gate
     subtask.gate_retry_count = 0
     subtask.max_gate_retries = 1
 
-    run = Run.create("test task")
+    run = Task.create("test task")
     run.subtasks = [subtask]
-    run.state = RunState.reviewing
+    run.state = TaskState.reviewing
 
     slot = AgentSlot(
         id="agent-1",
@@ -578,7 +578,7 @@ async def test_review_retries_on_gate_failure(orchestrator, mock_pool, mock_gate
     result = await orchestrator._review(run)
 
     # Should transition back to executing, not failed
-    assert result.state == RunState.executing
+    assert result.state == TaskState.executing
     assert subtask.state == SubtaskState.running
     assert subtask.gate_retry_count == 1
     # Should have sent fix prompt to agent
@@ -601,9 +601,9 @@ async def test_review_fails_when_gate_retries_exhausted(orchestrator, mock_pool,
     subtask.gate_retry_count = 1
     subtask.max_gate_retries = 1  # Already at max
 
-    run = Run.create("test task")
+    run = Task.create("test task")
     run.subtasks = [subtask]
-    run.state = RunState.reviewing
+    run.state = TaskState.reviewing
 
     slot = AgentSlot(
         id="agent-1",
@@ -626,7 +626,7 @@ async def test_review_fails_when_gate_retries_exhausted(orchestrator, mock_pool,
     result = await orchestrator._review(run)
 
     # Should fail — no retries left
-    assert result.state == RunState.failed
+    assert result.state == TaskState.failed
     assert subtask.state == SubtaskState.failed
 
 
@@ -641,9 +641,9 @@ async def test_review_respawns_dead_agent_for_retry(orchestrator, mock_pool, moc
     subtask.gate_retry_count = 0
     subtask.max_gate_retries = 1
 
-    run = Run.create("test task")
+    run = Task.create("test task")
     run.subtasks = [subtask]
-    run.state = RunState.reviewing
+    run.state = TaskState.reviewing
 
     slot = AgentSlot(
         id="agent-1",
@@ -677,7 +677,7 @@ async def test_review_respawns_dead_agent_for_retry(orchestrator, mock_pool, moc
     assert call_args.kwargs["task_id"] == subtask.id
     assert call_args.kwargs["run_id"] == run.id
     assert call_args.kwargs["subtask_description"] == subtask.description
-    assert result.state == RunState.executing
+    assert result.state == TaskState.executing
     assert subtask.state == SubtaskState.running
     assert subtask.gate_retry_count == 1
 
@@ -692,9 +692,9 @@ async def test_review_fails_when_respawn_errors(orchestrator, mock_pool, mock_ga
     subtask.gate_retry_count = 0
     subtask.max_gate_retries = 1
 
-    run = Run.create("test task")
+    run = Task.create("test task")
     run.subtasks = [subtask]
-    run.state = RunState.reviewing
+    run.state = TaskState.reviewing
 
     slot = AgentSlot(
         id="agent-1",
@@ -721,7 +721,7 @@ async def test_review_fails_when_respawn_errors(orchestrator, mock_pool, mock_ga
     result = await orchestrator._review(run)
 
     # Should fail since respawn failed
-    assert result.state == RunState.failed
+    assert result.state == TaskState.failed
     assert subtask.state == SubtaskState.failed
 
 

@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 
 from pydantic import BaseModel, Field
 
-from horse_fish.models import Run
+from horse_fish.models import Task
 from horse_fish.store.db import Store
 
 
@@ -33,7 +33,7 @@ class LessonStore:
     def __init__(self, store: Store) -> None:
         self._store = store
 
-    def extract_lessons(self, run: Run) -> list[Lesson]:
+    def extract_lessons(self, run: Task) -> list[Lesson]:
         """Analyze a completed run and extract structured lessons."""
         lessons: list[Lesson] = []
 

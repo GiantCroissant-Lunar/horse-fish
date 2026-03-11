@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from horse_fish.models import AgentSlot, AgentState, Run, RunState, Subtask, SubtaskResult, SubtaskState
+from horse_fish.models import AgentSlot, AgentState, Subtask, SubtaskResult, SubtaskState, Task, TaskState
 from horse_fish.orchestrator.engine import Orchestrator
 from horse_fish.validation.gates import GateResult
 
@@ -78,11 +78,11 @@ async def test_plan_success(orchestrator, mock_planner, sample_subtasks):
     """Test _plan success: state becomes executing with subtasks populated."""
     mock_planner.decompose.return_value = sample_subtasks
 
-    run = Run.create("Build user system")
-    run.state = RunState.planning
+    run = Task.create("Build user system")
+    run.state = TaskState.planning
     result = await orchestrator._plan(run)
 
-    assert result.state == RunState.executing
+    assert result.state == TaskState.executing
     assert len(result.subtasks) == 2
     assert result.subtasks[0].description == "Implement user model"
     assert result.subtasks[1].description == "Create API endpoints"
@@ -94,11 +94,11 @@ async def test_plan_failure(orchestrator, mock_planner):
     """Test _plan failure: state becomes failed."""
     mock_planner.decompose.side_effect = Exception("LLM timeout")
 
-    run = Run.create("Build user system")
-    run.state = RunState.planning
+    run = Task.create("Build user system")
+    run.state = TaskState.planning
     result = await orchestrator._plan(run)
 
-    assert result.state == RunState.failed
+    assert result.state == TaskState.failed
     assert len(result.subtasks) == 0
 
 
@@ -107,11 +107,11 @@ async def test_plan_empty_subtasks(orchestrator, mock_planner):
     """Test _plan with empty subtasks: state becomes failed."""
     mock_planner.decompose.return_value = []
 
-    run = Run.create("Build user system")
-    run.state = RunState.planning
+    run = Task.create("Build user system")
+    run.state = TaskState.planning
     result = await orchestrator._plan(run)
 
-    assert result.state == RunState.failed
+    assert result.state == TaskState.failed
     assert len(result.subtasks) == 0
 
 
@@ -159,12 +159,12 @@ async def test_execute_simple(orchestrator, mock_pool, sample_subtasks):
     with pytest.MonkeyPatch().context() as m:
         m.setattr("horse_fish.orchestrator.engine.asyncio.sleep", mock_sleep)
 
-        run = Run.create("Build user system")
+        run = Task.create("Build user system")
         run.subtasks = sample_subtasks
-        run.state = RunState.executing
+        run.state = TaskState.executing
         result = await orchestrator._execute(run)
 
-    assert result.state == RunState.reviewing
+    assert result.state == TaskState.reviewing
     assert all(s.state == SubtaskState.done for s in result.subtasks)
     assert mock_pool.spawn.call_count == 2
     assert mock_pool.send_task.call_count == 2
@@ -176,9 +176,9 @@ async def test_execute_respects_dag_deps(orchestrator, mock_pool):
     # Create subtasks where subtask-2 depends on subtask-1
     subtask1 = Subtask(id="subtask-1", description="Implement base")
     subtask2 = Subtask(id="subtask-2", description="Build on base", deps=["subtask-1"])
-    run = Run.create("Build system")
+    run = Task.create("Build system")
     run.subtasks = [subtask1, subtask2]
-    run.state = RunState.executing
+    run.state = TaskState.executing
     # Set max_agents to 1 so only subtask-1 can be dispatched initially
     orchestrator._max_agents = 1
 
@@ -225,9 +225,9 @@ async def test_execute_agent_spawn_failure(orchestrator, mock_pool):
     """Test _execute handles agent spawn failure."""
     subtask1 = Subtask(id="subtask-1", description="Task 1")
     subtask2 = Subtask(id="subtask-2", description="Task 2")
-    run = Run.create("Build system")
+    run = Task.create("Build system")
     run.subtasks = [subtask1, subtask2]
-    run.state = RunState.executing
+    run.state = TaskState.executing
 
     # Mock spawn to fail for subtask-1
     mock_pool.spawn.side_effect = [Exception("Tmux error"), None]
@@ -240,7 +240,7 @@ async def test_execute_agent_spawn_failure(orchestrator, mock_pool):
 
         result = await orchestrator._execute(run)
 
-    assert result.state == RunState.failed
+    assert result.state == TaskState.failed
     assert subtask1.state == SubtaskState.failed
 
 
@@ -248,9 +248,9 @@ async def test_execute_agent_spawn_failure(orchestrator, mock_pool):
 async def test_execute_deadlock_detection(orchestrator, mock_pool):
     """Test _execute deadlock detection when nothing can run."""
     subtask1 = Subtask(id="subtask-1", description="Task 1", deps=["nonexistent"])
-    run = Run.create("Build system")
+    run = Task.create("Build system")
     run.subtasks = [subtask1]
-    run.state = RunState.executing
+    run.state = TaskState.executing
 
     mock_pool.spawn = AsyncMock()
     mock_pool.send_task = AsyncMock()
@@ -263,7 +263,7 @@ async def test_execute_deadlock_detection(orchestrator, mock_pool):
 
         result = await orchestrator._execute(run)
 
-    assert result.state == RunState.failed
+    assert result.state == TaskState.failed
     mock_pool.spawn.assert_not_called()
 
 
@@ -272,9 +272,9 @@ async def test_execute_subtask_failure(orchestrator, mock_pool):
     """Test _execute when a subtask fails."""
     subtask1 = Subtask(id="subtask-1", description="Task 1")
     subtask2 = Subtask(id="subtask-2", description="Task 2")
-    run = Run.create("Build system")
+    run = Task.create("Build system")
     run.subtasks = [subtask1, subtask2]
-    run.state = RunState.executing
+    run.state = TaskState.executing
 
     slot1 = AgentSlot(
         id="agent-1",
@@ -322,7 +322,7 @@ async def test_execute_subtask_failure(orchestrator, mock_pool):
 
         result = await orchestrator._execute(run)
 
-    assert result.state == RunState.failed
+    assert result.state == TaskState.failed
     assert subtask1.state == SubtaskState.failed
 
 
@@ -330,9 +330,9 @@ async def test_execute_subtask_failure(orchestrator, mock_pool):
 async def test_review_all_gates_pass(orchestrator, mock_pool, mock_gates):
     """Test _review all gates pass → state becomes merging."""
     subtask = Subtask(id="subtask-1", description="Task 1", state=SubtaskState.done, agent="agent-1")
-    run = Run.create("Build system")
+    run = Task.create("Build system")
     run.subtasks = [subtask]
-    run.state = RunState.reviewing
+    run.state = TaskState.reviewing
 
     # Mock slot with worktree path
     slot = AgentSlot(
@@ -356,7 +356,7 @@ async def test_review_all_gates_pass(orchestrator, mock_pool, mock_gates):
 
     result = await orchestrator._review(run)
 
-    assert result.state == RunState.merging
+    assert result.state == TaskState.merging
     mock_gates.run_all.assert_called_once_with("/tmp/worktree")
 
 
@@ -371,9 +371,9 @@ async def test_review_gate_failure(orchestrator, mock_pool, mock_gates):
         gate_retry_count=1,
         max_gate_retries=1,
     )
-    run = Run.create("Build system")
+    run = Task.create("Build system")
     run.subtasks = [subtask]
-    run.state = RunState.reviewing
+    run.state = TaskState.reviewing
 
     slot = AgentSlot(
         id="agent-1",
@@ -399,7 +399,7 @@ async def test_review_gate_failure(orchestrator, mock_pool, mock_gates):
 
     result = await orchestrator._review(run)
 
-    assert result.state == RunState.failed
+    assert result.state == TaskState.failed
     assert subtask.state == SubtaskState.failed
 
 
@@ -414,9 +414,9 @@ async def test_review_emits_gate_retry_span(mock_pool, mock_planner, mock_gates)
         gate_retry_count=0,
         max_gate_retries=1,
     )
-    run = Run.create("Build system")
+    run = Task.create("Build system")
     run.subtasks = [subtask]
-    run.state = RunState.reviewing
+    run.state = TaskState.reviewing
 
     slot = AgentSlot(
         id="agent-1",
@@ -458,7 +458,7 @@ async def test_review_emits_gate_retry_span(mock_pool, mock_planner, mock_gates)
 
     result = await orchestrator._review(run)
 
-    assert result.state == RunState.executing
+    assert result.state == TaskState.executing
     span_names = [call.args[1] for call in mock_tracer.span.call_args_list]
     assert "subtask.gate_retry" in span_names
     gate_retry_end_calls = [call for call in mock_tracer.end_span.call_args_list if call.args[0] is gate_retry_span]
@@ -470,15 +470,15 @@ async def test_review_emits_gate_retry_span(mock_pool, mock_planner, mock_gates)
 async def test_review_exception(orchestrator, mock_pool, mock_gates):
     """Test _review with exception → state becomes failed."""
     subtask = Subtask(id="subtask-1", description="Task 1", state=SubtaskState.done, agent="agent-1")
-    run = Run.create("Build system")
+    run = Task.create("Build system")
     run.subtasks = [subtask]
-    run.state = RunState.reviewing
+    run.state = TaskState.reviewing
 
     mock_pool._get_slot.side_effect = KeyError("Agent not found")
 
     result = await orchestrator._review(run)
 
-    assert result.state == RunState.failed
+    assert result.state == TaskState.failed
     assert subtask.state == SubtaskState.failed
 
 
@@ -486,9 +486,9 @@ async def test_review_exception(orchestrator, mock_pool, mock_gates):
 async def test_merge_success(orchestrator, mock_pool):
     """Test _merge success → state becomes completed."""
     subtask = Subtask(id="subtask-1", description="Task 1", state=SubtaskState.done, agent="agent-1")
-    run = Run.create("Build system")
+    run = Task.create("Build system")
     run.subtasks = [subtask]
-    run.state = RunState.merging
+    run.state = TaskState.merging
 
     slot = AgentSlot(
         id="agent-1",
@@ -504,7 +504,7 @@ async def test_merge_success(orchestrator, mock_pool):
 
     result = await orchestrator._merge(run)
 
-    assert result.state == RunState.completed
+    assert result.state == TaskState.completed
     mock_pool._worktrees.merge.assert_called_once_with("hf-subtask-1")
 
 
@@ -512,9 +512,9 @@ async def test_merge_success(orchestrator, mock_pool):
 async def test_merge_conflict(orchestrator, mock_pool):
     """Test _merge conflict → state becomes failed."""
     subtask = Subtask(id="subtask-1", description="Task 1", state=SubtaskState.done, agent="agent-1")
-    run = Run.create("Build system")
+    run = Task.create("Build system")
     run.subtasks = [subtask]
-    run.state = RunState.merging
+    run.state = TaskState.merging
 
     slot = AgentSlot(
         id="agent-1",
@@ -530,7 +530,7 @@ async def test_merge_conflict(orchestrator, mock_pool):
 
     result = await orchestrator._merge(run)
 
-    assert result.state == RunState.failed
+    assert result.state == TaskState.failed
     assert subtask.state == SubtaskState.failed
 
 
@@ -538,9 +538,9 @@ async def test_merge_conflict(orchestrator, mock_pool):
 async def test_merge_exception(orchestrator, mock_pool):
     """Test _merge with exception → state becomes failed."""
     subtask = Subtask(id="subtask-1", description="Task 1", state=SubtaskState.done, agent="agent-1")
-    run = Run.create("Build system")
+    run = Task.create("Build system")
     run.subtasks = [subtask]
-    run.state = RunState.merging
+    run.state = TaskState.merging
 
     slot = AgentSlot(
         id="agent-1",
@@ -556,7 +556,7 @@ async def test_merge_exception(orchestrator, mock_pool):
 
     result = await orchestrator._merge(run)
 
-    assert result.state == RunState.failed
+    assert result.state == TaskState.failed
     assert subtask.state == SubtaskState.failed
 
 
@@ -628,7 +628,7 @@ async def test_full_lifecycle_success(orchestrator, mock_pool, mock_planner, moc
 
         result = await orchestrator.run("Build system")
 
-    assert result.state == RunState.completed
+    assert result.state == TaskState.completed
     assert result.completed_at is not None
     assert all(s.state == SubtaskState.done for s in result.subtasks)
 
@@ -640,7 +640,7 @@ async def test_full_lifecycle_planner_error(orchestrator, mock_planner):
 
     result = await orchestrator.run("Build system")
 
-    assert result.state == RunState.failed
+    assert result.state == TaskState.failed
 
 
 @pytest.mark.asyncio
@@ -695,7 +695,7 @@ async def test_full_lifecycle_gate_failure(orchestrator, mock_pool, mock_planner
 
         result = await orchestrator.run("Build system")
 
-    assert result.state == RunState.failed
+    assert result.state == TaskState.failed
 
 
 @pytest.mark.asyncio
@@ -750,7 +750,7 @@ async def test_full_lifecycle_merge_conflict(orchestrator, mock_pool, mock_plann
 
         result = await orchestrator.run("Build system")
 
-    assert result.state == RunState.failed
+    assert result.state == TaskState.failed
 
 
 @pytest.mark.asyncio
@@ -767,25 +767,25 @@ async def test_no_handler_for_state():
     )
 
     # Create a run in an invalid state that has no handler
-    run = Run.create("Task")
-    run.state = RunState.completed  # Terminal state, no handler
+    run = Task.create("Task")
+    run.state = TaskState.completed  # Terminal state, no handler
 
     # The run() method should exit the loop since completed is terminal
     result = await orchestrator.run("Task")
     # Should return the run unchanged (already completed)
-    assert result.state == RunState.completed
+    assert result.state == TaskState.completed
 
 
 def test_deps_met_no_deps():
     """Test _deps_met with no dependencies returns True."""
-    run = Run.create("Task")
+    run = Task.create("Task")
     subtask = Subtask(id="s1", description="Task 1")
     assert Orchestrator._deps_met(run, subtask) is True
 
 
 def test_deps_met_all_done():
     """Test _deps_met returns True when all deps are done."""
-    run = Run.create("Task")
+    run = Task.create("Task")
     run.subtasks = [
         Subtask(id="s1", description="Task 1", state=SubtaskState.done),
         Subtask(id="s2", description="Task 2", deps=["s1"]),
@@ -795,7 +795,7 @@ def test_deps_met_all_done():
 
 def test_deps_met_not_done():
     """Test _deps_met returns False when deps are not done."""
-    run = Run.create("Task")
+    run = Task.create("Task")
     run.subtasks = [
         Subtask(id="s1", description="Task 1", state=SubtaskState.pending),
         Subtask(id="s2", description="Task 2", deps=["s1"]),
@@ -805,7 +805,7 @@ def test_deps_met_not_done():
 
 def test_deps_met_partial():
     """Test _deps_met returns False when some deps are not done."""
-    run = Run.create("Task")
+    run = Task.create("Task")
     run.subtasks = [
         Subtask(id="s1", description="Task 1", state=SubtaskState.done),
         Subtask(id="s2", description="Task 2", state=SubtaskState.pending),
@@ -816,7 +816,7 @@ def test_deps_met_partial():
 
 def test_deps_met_by_id():
     """Test _deps_met works with ID-based dependencies."""
-    run = Run.create("Task")
+    run = Task.create("Task")
     run.subtasks = [
         Subtask(id="s1", description="Task 1", state=SubtaskState.done),
         Subtask(id="s2", description="Task 2", state=SubtaskState.done),
@@ -883,9 +883,9 @@ async def test_execute_uses_agent_selector_when_provided(mock_pool, mock_planner
     )
 
     subtask = Subtask(id="subtask-1", description="Task 1")
-    run = Run.create("Build system")
+    run = Task.create("Build system")
     run.subtasks = [subtask]
-    run.state = RunState.executing
+    run.state = TaskState.executing
 
     mock_pool.send_task = AsyncMock()
     mock_pool.check_status = AsyncMock(return_value=AgentState.dead)
@@ -906,7 +906,7 @@ async def test_execute_uses_agent_selector_when_provided(mock_pool, mock_planner
         m.setattr("horse_fish.orchestrator.engine.asyncio.sleep", mock_sleep)
         result = await orchestrator._execute(run)
 
-    assert result.state == RunState.reviewing
+    assert result.state == TaskState.reviewing
     assert subtask.state == SubtaskState.done
     # Verify selector.select was called
     mock_selector.select.assert_called_once()
@@ -928,9 +928,9 @@ async def test_execute_falls_back_to_round_robin_without_selector(mock_pool, moc
     )
 
     subtask = Subtask(id="subtask-1", description="Task 1")
-    run = Run.create("Build system")
+    run = Task.create("Build system")
     run.subtasks = [subtask]
-    run.state = RunState.executing
+    run.state = TaskState.executing
 
     slot = AgentSlot(
         id="agent-1",
@@ -960,7 +960,7 @@ async def test_execute_falls_back_to_round_robin_without_selector(mock_pool, moc
         m.setattr("horse_fish.orchestrator.engine.asyncio.sleep", mock_sleep)
         result = await orchestrator._execute(run)
 
-    assert result.state == RunState.reviewing
+    assert result.state == TaskState.reviewing
     assert subtask.state == SubtaskState.done
     # Verify spawn WAS called (round-robin fallback)
     mock_pool.spawn.assert_called_once()
@@ -987,9 +987,9 @@ async def test_selector_returns_none_skips_dispatch(mock_pool, mock_planner, moc
 
     # Create subtask with unmet deps so it won't be dispatched
     subtask = Subtask(id="subtask-1", description="Task 1", deps=["nonexistent"])
-    run = Run.create("Build system")
+    run = Task.create("Build system")
     run.subtasks = [subtask]
-    run.state = RunState.executing
+    run.state = TaskState.executing
 
     async def mock_sleep(seconds):
         return None
@@ -999,7 +999,7 @@ async def test_selector_returns_none_skips_dispatch(mock_pool, mock_planner, moc
         result = await orchestrator._execute(run)
 
     # Should fail due to deadlock (no subtasks can be dispatched)
-    assert result.state == RunState.failed
+    assert result.state == TaskState.failed
 
 
 @pytest.mark.asyncio
@@ -1024,9 +1024,9 @@ async def test_merge_uses_queue_when_provided(mock_pool, mock_planner, mock_gate
     )
 
     subtask = Subtask(id="subtask-1", description="Task 1", state=SubtaskState.done, agent="agent-1")
-    run = Run.create("Build system")
+    run = Task.create("Build system")
     run.subtasks = [subtask]
-    run.state = RunState.merging
+    run.state = TaskState.merging
 
     slot = AgentSlot(
         id="agent-1",
@@ -1042,7 +1042,7 @@ async def test_merge_uses_queue_when_provided(mock_pool, mock_planner, mock_gate
 
     result = await orchestrator._merge(run)
 
-    assert result.state == RunState.completed
+    assert result.state == TaskState.completed
     mock_merge_queue.enqueue.assert_called_once()
     mock_merge_queue.process.assert_called_once()
     # Direct merge should NOT be called when using queue
@@ -1063,9 +1063,9 @@ async def test_merge_falls_back_to_direct_without_queue(mock_pool, mock_planner,
     )
 
     subtask = Subtask(id="subtask-1", description="Task 1", state=SubtaskState.done, agent="agent-1")
-    run = Run.create("Build system")
+    run = Task.create("Build system")
     run.subtasks = [subtask]
-    run.state = RunState.merging
+    run.state = TaskState.merging
 
     slot = AgentSlot(
         id="agent-1",
@@ -1082,7 +1082,7 @@ async def test_merge_falls_back_to_direct_without_queue(mock_pool, mock_planner,
 
     result = await orchestrator._merge(run)
 
-    assert result.state == RunState.completed
+    assert result.state == TaskState.completed
     mock_pool._worktrees.merge.assert_called_once_with("hf-subtask-1")
 
 
@@ -1145,7 +1145,7 @@ async def test_run_stores_result_in_memory_on_completion(mock_pool, mock_planner
         m.setattr("horse_fish.orchestrator.engine.asyncio.sleep", mock_sleep)
         run = await orchestrator.run("Build system")
 
-    assert run.state == RunState.completed
+    assert run.state == TaskState.completed
     mock_memory.store_run_result.assert_called_once()
     call_args = mock_memory.store_run_result.call_args
     assert call_args[0][0].id == run.id  # first arg is the Run
@@ -1166,7 +1166,7 @@ async def test_run_does_not_store_memory_on_failure(mock_pool, mock_planner, moc
     )
     run = await orchestrator.run("Build system")
 
-    assert run.state == RunState.failed
+    assert run.state == TaskState.failed
     mock_memory.store_run_result.assert_not_called()
 
 
@@ -1224,7 +1224,7 @@ async def test_run_scores_trace_outcomes(mock_pool, mock_planner, mock_gates):
         m.setattr("horse_fish.orchestrator.engine.asyncio.sleep", mock_sleep)
         run = await orchestrator.run("Build system")
 
-    assert run.state == RunState.completed
+    assert run.state == TaskState.completed
     score_names = [call.args[1] for call in mock_tracer.score_trace.call_args_list]
     assert "run_success" in score_names
     assert "completed_subtasks" in score_names
@@ -1264,8 +1264,8 @@ def test_score_run_outcomes_includes_retry_and_merge_metrics(mock_pool, mock_pla
         runtime="claude",
         tracer=mock_tracer,
     )
-    run = Run.create("Build system")
-    run.state = RunState.failed
+    run = Task.create("Build system")
+    run.state = TaskState.failed
     run.subtasks = [
         Subtask(id="subtask-1", description="Task 1", state=SubtaskState.done),
         Subtask(id="subtask-2", description="Task 2", state=SubtaskState.failed),
@@ -1390,8 +1390,8 @@ def test_trace_output_includes_runtime_observation_summary(mock_pool, mock_plann
         gates=mock_gates,
         runtime="claude",
     )
-    run = Run.create("Build system")
-    run.state = RunState.completed
+    run = Task.create("Build system")
+    run.state = TaskState.completed
     run.subtasks = [
         Subtask(id="subtask-1", description="Task 1", state=SubtaskState.done),
         Subtask(id="subtask-2", description="Task 2", state=SubtaskState.failed),
@@ -1512,7 +1512,7 @@ async def test_run_scores_execution_retries_after_stall(mock_pool, mock_planner,
         m.setattr("horse_fish.orchestrator.engine.asyncio.sleep", mock_sleep)
         run = await orchestrator.run("Build system")
 
-    assert run.state == RunState.completed
+    assert run.state == TaskState.completed
     score_calls = {call.args[1]: call for call in mock_tracer.score_trace.call_args_list}
     assert score_calls["execution_retry_count"].args[2] == 1.0
     assert score_calls["execution_retry_count"].kwargs["metadata"] == {"retry_exhausted_count": 0}
@@ -1574,7 +1574,7 @@ async def test_run_scores_merge_conflicts(mock_pool, mock_planner, mock_gates):
         m.setattr("horse_fish.orchestrator.engine.asyncio.sleep", mock_sleep)
         run = await orchestrator.run("Build system")
 
-    assert run.state == RunState.failed
+    assert run.state == TaskState.failed
     score_calls = {call.args[1]: call for call in mock_tracer.score_trace.call_args_list}
     assert score_calls["merge_conflict_count"].args[2] == 1.0
     assert score_calls["merge_conflict_count"].kwargs["metadata"] == {
@@ -1643,7 +1643,7 @@ async def test_run_emits_subtask_operation_spans(mock_pool, mock_planner, mock_g
         m.setattr("horse_fish.orchestrator.engine.asyncio.sleep", mock_sleep)
         run = await orchestrator.run("Build system")
 
-    assert run.state == RunState.completed
+    assert run.state == TaskState.completed
     span_names = [call.args[1] for call in mock_tracer.span.call_args_list]
     assert "subtask.dispatch" in span_names
     assert "subtask.collect_result" in span_names
@@ -1681,9 +1681,9 @@ async def test_execute_sets_last_activity_at_on_dispatch(mock_pool, mock_planner
     )
 
     subtask = Subtask(id="subtask-1", description="Task 1")
-    run = Run.create("Build system")
+    run = Task.create("Build system")
     run.subtasks = [subtask]
-    run.state = RunState.executing
+    run.state = TaskState.executing
 
     slot = AgentSlot(
         id="agent-1",
@@ -1715,7 +1715,7 @@ async def test_execute_sets_last_activity_at_on_dispatch(mock_pool, mock_planner
         result = await orchestrator._execute(run)
 
     after_time = datetime.now(UTC)
-    assert result.state == RunState.reviewing
+    assert result.state == TaskState.reviewing
     assert subtask.last_activity_at is not None
     assert before_time <= subtask.last_activity_at <= after_time
 
@@ -1739,9 +1739,9 @@ async def test_execute_detects_stalled_agent_and_retries(mock_pool, mock_planner
     subtask.agent = "agent-1"
     subtask.last_activity_at = datetime.now(UTC) - timedelta(seconds=60)
 
-    run = Run.create("Build system")
+    run = Task.create("Build system")
     run.subtasks = [subtask]
-    run.state = RunState.executing
+    run.state = TaskState.executing
 
     # Mock release method
     mock_pool.release = AsyncMock()
@@ -1805,9 +1805,9 @@ async def test_execute_fails_after_max_retries(mock_pool, mock_planner, mock_gat
     subtask.agent = "agent-1"
     subtask.last_activity_at = datetime.now(UTC) - timedelta(seconds=60)
 
-    run = Run.create("Build system")
+    run = Task.create("Build system")
     run.subtasks = [subtask]
-    run.state = RunState.executing
+    run.state = TaskState.executing
 
     mock_pool.check_status = AsyncMock(return_value=AgentState.busy)
     mock_pool.check_heartbeat = AsyncMock(return_value=False)  # No output change — allow stall detection
@@ -1823,7 +1823,7 @@ async def test_execute_fails_after_max_retries(mock_pool, mock_planner, mock_gat
         m.setattr("horse_fish.orchestrator.engine.asyncio.sleep", mock_sleep)
         result = await orchestrator._execute(run)
 
-    assert result.state == RunState.failed
+    assert result.state == TaskState.failed
     assert subtask.state == SubtaskState.failed
 
 
@@ -1844,9 +1844,9 @@ async def test_check_stalls_no_stalled_subtasks(mock_pool, mock_planner, mock_ga
     # Recent activity - not stalled
     subtask.last_activity_at = datetime.now(UTC)
 
-    run = Run.create("Build system")
+    run = Task.create("Build system")
     run.subtasks = [subtask]
-    run.state = RunState.executing
+    run.state = TaskState.executing
 
     agent_map = {"subtask-1": "agent-1"}
     retried = await orchestrator._check_stalls(run, agent_map)
@@ -1874,9 +1874,9 @@ async def test_check_stalls_retries_stalled_subtask(mock_pool, mock_planner, moc
     # Old activity - stalled
     subtask.last_activity_at = datetime.now(UTC) - timedelta(seconds=60)
 
-    run = Run.create("Build system")
+    run = Task.create("Build system")
     run.subtasks = [subtask]
-    run.state = RunState.executing
+    run.state = TaskState.executing
 
     agent_map = {"subtask-1": "agent-1"}
     mock_pool.release = AsyncMock()
@@ -1916,9 +1916,9 @@ async def test_check_stalls_emits_stall_recovery_span(mock_pool, mock_planner, m
     subtask.agent = "agent-1"
     subtask.last_activity_at = datetime.now(UTC) - timedelta(seconds=60)
 
-    run = Run.create("Build system")
+    run = Task.create("Build system")
     run.subtasks = [subtask]
-    run.state = RunState.executing
+    run.state = TaskState.executing
 
     agent_map = {"subtask-1": "agent-1"}
     mock_pool.release = AsyncMock()

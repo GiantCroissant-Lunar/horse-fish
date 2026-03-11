@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from horse_fish.models import Run, Subtask, SubtaskResult
+from horse_fish.models import Subtask, SubtaskResult, Task
 
 
 class TestCogneeSearchType:
@@ -98,7 +98,7 @@ class TestCogneeStructuredIngestion:
         from horse_fish.memory.cognee_store import CogneeMemory
 
         mem = CogneeMemory(data_dir=tmp_path / "cognee")
-        run = Run.create(task="Fix auth bug")
+        run = Task.create(task="Fix auth bug")
         run.state = "completed"
         results = [
             SubtaskResult(
@@ -172,7 +172,7 @@ class TestCogneeMemoryIngest:
 
         mem = CogneeMemory(data_dir=tmp_path / "cognee")
 
-        run = Run.create(task="Fix the login bug")
+        run = Task.create(task="Fix the login bug")
         run.subtasks = [Subtask.create("Patch auth.py")]
         run.state = "completed"
         run.completed_at = datetime.now(UTC)
