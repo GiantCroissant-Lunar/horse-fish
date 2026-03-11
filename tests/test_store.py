@@ -28,7 +28,7 @@ def test_migrate_idempotent(tmp_path: Path) -> None:
     store.migrate()  # second call should be a no-op
     row = store.fetchone("SELECT MAX(version) AS v FROM schema_version")
     assert row is not None
-    assert row["v"] == 4
+    assert row["v"] == 5
     store.close()
 
 
@@ -418,4 +418,123 @@ def test_update_run_state_with_completed_at(tmp_path: Path) -> None:
     assert row is not None
     assert row["state"] == "completed"
     assert row["completed_at"] == "2026-03-09T02:00:00Z"
+    store.close()
+
+
+# --- Plan store tests ---
+
+
+def test_insert_and_fetch_plan(tmp_path: Path) -> None:
+    """insert_plan should insert a plan, fetch_plan should retrieve it."""
+    store = make_store(tmp_path)
+    store.insert_plan("plan-1", "deploy to production")
+    row = store.fetch_plan("plan-1")
+    assert row is not None
+    assert row["goal"] == "deploy to production"
+    assert row["state"] == "planning"
+    assert row["round"] == 0
+    assert row["max_rounds"] == 10
+    assert row["created_at"] is not None
+    assert row["completed_at"] is None
+    # Prefix match
+    row2 = store.fetch_plan("plan-")
+    assert row2 is not None
+    assert row2["id"] == "plan-1"
+    store.close()
+
+
+def test_update_plan_state(tmp_path: Path) -> None:
+    """update_plan_state should change state and optionally set completed_at."""
+    store = make_store(tmp_path)
+    store.insert_plan("plan-1", "goal")
+    store.update_plan_state("plan-1", "executing")
+    row = store.fetch_plan("plan-1")
+    assert row is not None
+    assert row["state"] == "executing"
+    assert row["completed_at"] is None
+    store.update_plan_state("plan-1", "completed", "2026-03-11T12:00:00Z")
+    row = store.fetch_plan("plan-1")
+    assert row is not None
+    assert row["state"] == "completed"
+    assert row["completed_at"] == "2026-03-11T12:00:00Z"
+    store.close()
+
+
+def test_update_plan_round(tmp_path: Path) -> None:
+    """update_plan_round should update round and optionally goal_conditions."""
+    import json
+
+    store = make_store(tmp_path)
+    store.insert_plan("plan-1", "goal")
+    store.update_plan_round("plan-1", 2, ["tests pass", "lint clean"])
+    row = store.fetch_plan("plan-1")
+    assert row is not None
+    assert row["round"] == 2
+    conditions = json.loads(row["goal_conditions"])
+    assert conditions == ["tests pass", "lint clean"]
+    # Update round only
+    store.update_plan_round("plan-1", 3)
+    row = store.fetch_plan("plan-1")
+    assert row is not None
+    assert row["round"] == 3
+    # goal_conditions should be unchanged
+    conditions = json.loads(row["goal_conditions"])
+    assert conditions == ["tests pass", "lint clean"]
+    store.close()
+
+
+def test_fetch_active_plans(tmp_path: Path) -> None:
+    """fetch_active_plans should return only plans in active states."""
+    store = make_store(tmp_path)
+    store.insert_plan("plan-planning", "goal 1")
+    store.insert_plan("plan-executing", "goal 2")
+    store.update_plan_state("plan-executing", "executing")
+    store.insert_plan("plan-completed", "goal 3")
+    store.update_plan_state("plan-completed", "completed", "2026-03-11T12:00:00Z")
+    store.insert_plan("plan-replanning", "goal 4")
+    store.update_plan_state("plan-replanning", "replanning")
+    active = store.fetch_active_plans()
+    ids = {r["id"] for r in active}
+    assert ids == {"plan-planning", "plan-executing", "plan-replanning"}
+    store.close()
+
+
+def test_fetch_plan_tasks(tmp_path: Path) -> None:
+    """fetch_plan_tasks should return runs associated with a plan."""
+    store = make_store(tmp_path)
+    store.insert_plan("plan-1", "goal")
+    # Insert a run with plan_id
+    store.execute(
+        "INSERT INTO runs (id, task, state, created_at, plan_id) VALUES (?, ?, ?, ?, ?)",
+        ("run-1", "subtask 1", "executing", "2026-03-11T01:00:00Z", "plan-1"),
+    )
+    store.execute(
+        "INSERT INTO runs (id, task, state, created_at, plan_id) VALUES (?, ?, ?, ?, ?)",
+        ("run-2", "subtask 2", "pending", "2026-03-11T02:00:00Z", "plan-1"),
+    )
+    # Insert a run without plan_id
+    store.execute(
+        "INSERT INTO runs (id, task, state, created_at) VALUES (?, ?, ?, ?)",
+        ("run-3", "unrelated", "pending", "2026-03-11T03:00:00Z"),
+    )
+    tasks = store.fetch_plan_tasks("plan-1")
+    assert len(tasks) == 2
+    assert tasks[0]["id"] == "run-1"
+    assert tasks[1]["id"] == "run-2"
+    store.close()
+
+
+def test_plans_table_exists(tmp_path: Path) -> None:
+    """Plans table should exist after migration."""
+    store = make_store(tmp_path)
+    tables = {r["name"] for r in store.fetchall("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "plans" in tables
+    store.close()
+
+
+def test_runs_table_has_plan_id_column(tmp_path: Path) -> None:
+    """Runs table should have plan_id column after migration 5."""
+    store = make_store(tmp_path)
+    columns = {r["name"] for r in store.fetchall("PRAGMA table_info(runs)")}
+    assert "plan_id" in columns
     store.close()

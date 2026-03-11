@@ -112,6 +112,23 @@ MIGRATIONS: list[tuple[int, str]] = [
         ALTER TABLE agents ADD COLUMN pgid INTEGER;
         """,
     ),
+    (
+        5,
+        """
+        CREATE TABLE IF NOT EXISTS plans (
+            id TEXT PRIMARY KEY,
+            goal TEXT NOT NULL,
+            goal_conditions TEXT NOT NULL DEFAULT '[]',
+            state TEXT NOT NULL DEFAULT 'planning',
+            round INTEGER NOT NULL DEFAULT 0,
+            max_rounds INTEGER NOT NULL DEFAULT 10,
+            created_at TEXT NOT NULL,
+            completed_at TEXT
+        );
+
+        ALTER TABLE runs ADD COLUMN plan_id TEXT REFERENCES plans(id);
+        """,
+    ),
 ]
 
 
@@ -268,6 +285,90 @@ class Store:
         return self.fetchall(
             "SELECT * FROM runs WHERE state IN ('planning', 'executing', 'reviewing', 'merging') "
             "ORDER BY created_at ASC",
+        )
+
+    # --- Plan methods ---
+
+    def insert_plan(self, plan_id: str, goal: str) -> None:
+        """Insert a new plan in 'planning' state."""
+        now = datetime.now(UTC).isoformat()
+        self.execute(
+            "INSERT INTO plans (id, goal, state, created_at) VALUES (?, ?, 'planning', ?)",
+            (plan_id, goal, now),
+        )
+
+    def fetch_plan(self, plan_id: str) -> dict[str, Any] | None:
+        """Fetch a single plan by ID (supports prefix match)."""
+        exact = self.fetchone("SELECT * FROM plans WHERE id = ?", (plan_id,))
+        if exact:
+            return exact
+        matches = self.fetchall("SELECT * FROM plans WHERE id LIKE ?", (f"{plan_id}%",))
+        return matches[0] if len(matches) == 1 else None
+
+    def update_plan_state(self, plan_id: str, state: str, completed_at: str | None = None) -> None:
+        """Update a plan's state, optionally setting completed_at."""
+        if completed_at:
+            self.execute(
+                "UPDATE plans SET state = ?, completed_at = ? WHERE id = ?",
+                (state, completed_at, plan_id),
+            )
+        else:
+            self.execute("UPDATE plans SET state = ? WHERE id = ?", (state, plan_id))
+
+    def update_plan_round(self, plan_id: str, round: int, goal_conditions: list[str] | None = None) -> None:
+        """Update a plan's round counter and optionally goal_conditions."""
+        import json
+
+        if goal_conditions is not None:
+            self.execute(
+                "UPDATE plans SET round = ?, goal_conditions = ? WHERE id = ?",
+                (round, json.dumps(goal_conditions), plan_id),
+            )
+        else:
+            self.execute("UPDATE plans SET round = ? WHERE id = ?", (round, plan_id))
+
+    def fetch_active_plans(self) -> list[dict[str, Any]]:
+        """Fetch plans in active states (planning, executing, replanning)."""
+        return self.fetchall(
+            "SELECT * FROM plans WHERE state IN ('planning', 'executing', 'replanning') ORDER BY created_at ASC",
+        )
+
+    def fetch_recent_plans(self, limit: int = 10) -> list[dict[str, Any]]:
+        """Fetch recent plans, ordered by creation date (newest first)."""
+        return self.fetchall(
+            "SELECT * FROM plans ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        )
+
+    def fetch_plan_tasks(self, plan_id: str) -> list[dict[str, Any]]:
+        """Fetch all runs (tasks) associated with a plan."""
+        return self.fetchall(
+            "SELECT * FROM runs WHERE plan_id = ? ORDER BY created_at",
+            (plan_id,),
+        )
+
+    def upsert_plan(
+        self,
+        plan_id: str,
+        goal: str,
+        state: str,
+        goal_conditions: list[str] | None = None,
+        round: int = 0,
+        created_at: str | None = None,
+        completed_at: str | None = None,
+    ) -> None:
+        """Insert or update a plan record."""
+        import json
+
+        conditions_json = json.dumps(goal_conditions) if goal_conditions is not None else "[]"
+        self.execute(
+            """INSERT INTO plans (id, goal, state, goal_conditions, round, created_at, completed_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET goal=excluded.goal, state=excluded.state,
+               goal_conditions=excluded.goal_conditions, round=excluded.round,
+               completed_at=excluded.completed_at,
+               created_at=COALESCE(excluded.created_at, plans.created_at)""",
+            (plan_id, goal, state, conditions_json, round, created_at, completed_at),
         )
 
     def update_run_state(self, run_id: str, state: str, completed_at: str | None = None) -> None:

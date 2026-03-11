@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 from horse_fish.models import (
     AgentSlot,
     AgentState,
+    Plan,
+    PlanState,
     Subtask,
     SubtaskResult,
     SubtaskState,
@@ -302,3 +304,61 @@ class TestTask:
         restored = Task.model_validate(data)
         assert restored.complexity == TaskComplexity.trio
         assert restored.lessons == ["Learned something"]
+
+
+class TestPlanState:
+    def test_values(self):
+        assert PlanState.planning == "planning"
+        assert PlanState.executing == "executing"
+        assert PlanState.replanning == "replanning"
+        assert PlanState.completed == "completed"
+        assert PlanState.partial_success == "partial_success"
+        assert PlanState.failed == "failed"
+        assert PlanState.cancelled == "cancelled"
+
+    def test_is_str(self):
+        assert isinstance(PlanState.planning, str)
+
+
+class TestPlan:
+    def test_create_factory(self):
+        plan = Plan.create("deploy to production")
+        assert plan.goal == "deploy to production"
+        assert isinstance(plan.id, str)
+        assert len(plan.id) == 36  # UUID4
+        assert plan.state == PlanState.planning
+        assert plan.tasks == []
+        assert plan.goal_conditions == []
+        assert plan.round == 0
+        assert plan.max_rounds == 10
+        assert isinstance(plan.created_at, datetime)
+        assert plan.completed_at is None
+
+    def test_unique_ids(self):
+        p1 = Plan.create("goal a")
+        p2 = Plan.create("goal b")
+        assert p1.id != p2.id
+
+    def test_add_tasks(self):
+        plan = Plan.create("multi-task goal")
+        plan.tasks.append(Task.create("step 1"))
+        plan.tasks.append(Task.create("step 2"))
+        assert len(plan.tasks) == 2
+
+    def test_goal_conditions(self):
+        plan = Plan.create("goal")
+        plan.goal_conditions = ["all tests pass", "no lint errors"]
+        assert len(plan.goal_conditions) == 2
+
+    def test_serialization_roundtrip(self):
+        plan = Plan.create("serialize test")
+        plan.tasks.append(Task.create("sub1"))
+        plan.goal_conditions = ["condition1"]
+        data = plan.model_dump()
+        assert data["state"] == "planning"
+        assert len(data["tasks"]) == 1
+        assert data["goal_conditions"] == ["condition1"]
+        restored = Plan.model_validate(data)
+        assert restored.id == plan.id
+        assert restored.goal == plan.goal
+        assert len(restored.tasks) == 1

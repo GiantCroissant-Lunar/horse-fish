@@ -127,3 +127,29 @@ class Task(BaseModel):
     @classmethod
     def create(cls, task: str) -> Task:
         return cls(id=str(uuid.uuid4()), task=task)
+
+
+class PlanState(StrEnum):
+    planning = "planning"
+    executing = "executing"
+    replanning = "replanning"
+    completed = "completed"
+    partial_success = "partial_success"
+    failed = "failed"
+    cancelled = "cancelled"
+
+
+class Plan(BaseModel):
+    id: str
+    goal: str
+    goal_conditions: list[str] = Field(default_factory=list)
+    state: PlanState = PlanState.planning
+    tasks: list[Task] = Field(default_factory=list)
+    round: int = 0
+    max_rounds: int = 10
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    completed_at: datetime | None = None
+
+    @classmethod
+    def create(cls, goal: str) -> Plan:
+        return cls(id=str(uuid.uuid4()), goal=goal)
