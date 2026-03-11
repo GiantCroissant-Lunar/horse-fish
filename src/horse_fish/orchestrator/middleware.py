@@ -80,7 +80,7 @@ class LogContextMiddleware:
     """Sets structured logging context around state handlers."""
 
     async def __call__(self, run: Task, next: Handler, ctx: MiddlewareContext) -> Task:
-        set_log_context(run_id=run.id, state=run.state.value)
+        set_log_context(run_id=run.id)
         result = await next(run)
         if result.state == TaskState.executing:
             clear_log_context()

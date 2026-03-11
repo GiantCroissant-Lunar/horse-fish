@@ -169,7 +169,7 @@ async def test_log_context_middleware_sets_context():
 
     with patch("horse_fish.orchestrator.middleware.set_log_context") as mock_set:
         await mw(task, handler, ctx)
-        mock_set.assert_called_with(run_id=task.id, state=TaskState.planning.value)
+        mock_set.assert_called_with(run_id=task.id)
 
 
 @pytest.mark.asyncio

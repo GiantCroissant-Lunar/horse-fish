@@ -14,8 +14,17 @@ from horse_fish.memory.lessons import LessonStore
 from horse_fish.memory.store import MemoryStore
 from horse_fish.merge.queue import MergeQueue
 from horse_fish.models import AgentState, ContextBrief, Subtask, SubtaskResult, SubtaskState, Task, TaskState
-from horse_fish.observability.log_context import clear_log_context, reset_log_context, set_log_context
+from horse_fish.observability.log_context import reset_log_context, set_log_context
 from horse_fish.observability.traces import Tracer
+from horse_fish.orchestrator.middleware import (
+    LogContextMiddleware,
+    MemoryMiddleware,
+    MiddlewareContext,
+    PersistenceMiddleware,
+    ScoutContextMiddleware,
+    TracingMiddleware,
+    compose_chain,
+)
 from horse_fish.planner.decompose import Planner
 from horse_fish.planner.scout import SCOUT_PROMPT_TEMPLATE, parse_scout_output, programmatic_scout
 from horse_fish.planner.smart import SmartPlanner
@@ -95,6 +104,19 @@ class Orchestrator:
             TaskState.reviewing: self._review,
             TaskState.merging: self._merge,
         }
+
+        # Build middleware chain
+        self._middlewares: list = [
+            TracingMiddleware(tracer),
+            LogContextMiddleware(),
+            PersistenceMiddleware(self._async_persist_run),
+            MemoryMiddleware(self._learn),
+            ScoutContextMiddleware(lambda: self._context_brief),
+        ]
+
+    async def _async_persist_run(self, run: Task) -> None:
+        """Async wrapper for _persist_run (middleware expects async)."""
+        self._persist_run(run)
 
     def _subtask_span(
         self,
@@ -326,21 +348,13 @@ class Orchestrator:
                 if handler is None:
                     raise OrchestratorError(f"No handler for state {run.state}")
 
-                span = self._tracer.span(trace, run.state.value) if self._tracer and trace else None
-                run = await handler(run)
-                if self._tracer and span:
-                    self._tracer.end_span(
-                        span,
-                        {"state": run.state.value},
-                        metadata={"subtask_count": len(run.subtasks)},
-                    )
-
-                self._persist_run(run)
+                ctx = MiddlewareContext(trace=trace, context_brief=self._context_brief)
+                chain = compose_chain(self._middlewares, handler, ctx)
+                run = await chain(run)
+                # Propagate scout context brief from middleware
+                if ctx.context_brief is not None:
+                    self._context_brief = ctx.context_brief
                 logger.info("Run %s transitioned to %s", run.id, run.state)
-                # Update context if transitioning between subtasks
-                if run.state == TaskState.executing:
-                    clear_log_context()
-                    set_log_context(run_id=run.id)
         finally:
             run.completed_at = datetime.now(UTC)
             self._persist_run(run)
@@ -356,8 +370,6 @@ class Orchestrator:
                     output=self._trace_output(run),
                 )
             self._active_trace = None
-        if run.state == TaskState.completed:
-            await self._learn(run)
 
         return run
 
