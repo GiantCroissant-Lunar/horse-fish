@@ -23,7 +23,7 @@ class SubtaskState(StrEnum):
     escalated = "escalated"
 
 
-class RunState(StrEnum):
+class TaskState(StrEnum):
     queued = "queued"
     scouting = "scouting"
     planning = "planning"
@@ -113,10 +113,10 @@ class Subtask(BaseModel):
         return cls(id=str(uuid.uuid4()), description=description)
 
 
-class Run(BaseModel):
+class Task(BaseModel):
     id: str
     task: str
-    state: RunState = RunState.scouting
+    state: TaskState = TaskState.scouting
     complexity: TaskComplexity | None = None
     subtasks: list[Subtask] = Field(default_factory=list)
     lessons: list[str] = Field(default_factory=list)
@@ -125,5 +125,10 @@ class Run(BaseModel):
     allow_partial_success: bool = False
 
     @classmethod
-    def create(cls, task: str) -> Run:
+    def create(cls, task: str) -> Task:
         return cls(id=str(uuid.uuid4()), task=task)
+
+
+# Backward compatibility aliases — remove after full migration
+Run = Task
+RunState = TaskState
