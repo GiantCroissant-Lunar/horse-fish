@@ -1,4 +1,4 @@
-"""Tests for CogneeMemory — Cognee-backed knowledge graph memory."""
+"""Tests for CogneeMemory — Cognee-backed vector search memory."""
 
 from __future__ import annotations
 
@@ -11,10 +11,10 @@ from horse_fish.models import Subtask, SubtaskResult, Task
 
 
 class TestCogneeSearchType:
-    """Tests that search uses GRAPH_COMPLETION."""
+    """Tests that search uses CHUNKS."""
 
     @pytest.mark.asyncio
-    async def test_search_uses_graph_completion(self, tmp_path):
+    async def test_search_uses_chunks(self, tmp_path):
         from horse_fish.memory.cognee_store import CogneeMemory
 
         mem = CogneeMemory(data_dir=tmp_path / "cognee")
@@ -27,10 +27,10 @@ class TestCogneeSearchType:
             with patch("horse_fish.memory.cognee_store.SearchType", mock_search_type):
                 await mem.search("test query")
 
-            # Verify GRAPH_COMPLETION was used
+            # Verify CHUNKS was used
             call_kwargs = mock_cognee.search.call_args
             assert call_kwargs is not None
-            assert call_kwargs.kwargs.get("query_type") == mock_search_type.GRAPH_COMPLETION
+            assert call_kwargs.kwargs.get("query_type") == mock_search_type.CHUNKS
 
 
 class TestCogneeDatasets:
@@ -44,7 +44,6 @@ class TestCogneeDatasets:
 
         with patch("horse_fish.memory.cognee_store.cognee") as mock_cognee:
             mock_cognee.add = AsyncMock()
-            mock_cognee.cognify = AsyncMock()
             mock_cognee.config = MagicMock()
 
             await mem.ingest("test content", {"type": "run_result"})
@@ -61,33 +60,12 @@ class TestCogneeDatasets:
 
         with patch("horse_fish.memory.cognee_store.cognee") as mock_cognee:
             mock_cognee.add = AsyncMock()
-            mock_cognee.cognify = AsyncMock()
             mock_cognee.config = MagicMock()
 
             await mem.ingest("test content", {"dataset": "custom_ds"})
 
             call_args = mock_cognee.add.call_args
             assert call_args.kwargs.get("dataset_name") == "custom_ds"
-
-
-class TestCogneeTemporalCognify:
-    """Tests that cognify uses temporal mode."""
-
-    @pytest.mark.asyncio
-    async def test_cognify_uses_temporal(self, tmp_path):
-        from horse_fish.memory.cognee_store import CogneeMemory
-
-        mem = CogneeMemory(data_dir=tmp_path / "cognee")
-
-        with patch("horse_fish.memory.cognee_store.cognee") as mock_cognee:
-            mock_cognee.add = AsyncMock()
-            mock_cognee.cognify = AsyncMock()
-            mock_cognee.config = MagicMock()
-
-            await mem.ingest("test content")
-
-            call_kwargs = mock_cognee.cognify.call_args
-            assert call_kwargs.kwargs.get("temporal_cognify") is True
 
 
 class TestCogneeStructuredIngestion:
@@ -112,7 +90,6 @@ class TestCogneeStructuredIngestion:
 
         with patch("horse_fish.memory.cognee_store.cognee") as mock_cognee:
             mock_cognee.add = AsyncMock()
-            mock_cognee.cognify = AsyncMock()
             mock_cognee.config = MagicMock()
 
             await mem.ingest_run_result(run, results)
@@ -149,7 +126,7 @@ class TestCogneeMemoryIngest:
     """Tests for ingesting content into Cognee."""
 
     @pytest.mark.asyncio
-    async def test_ingest_calls_cognee_add_and_cognify(self, tmp_path):
+    async def test_ingest_calls_cognee_add(self, tmp_path):
         from horse_fish.memory.cognee_store import CogneeMemory
 
         mem = CogneeMemory(data_dir=tmp_path / "cognee")
@@ -158,13 +135,11 @@ class TestCogneeMemoryIngest:
             patch("horse_fish.memory.cognee_store.cognee") as mock_cognee,
         ):
             mock_cognee.add = AsyncMock()
-            mock_cognee.cognify = AsyncMock()
             mock_cognee.config = MagicMock()
 
             await mem.ingest("test content", {"type": "run_result"})
 
             mock_cognee.add.assert_awaited_once()
-            mock_cognee.cognify.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_ingest_run_result_structured_content(self, tmp_path):
@@ -189,7 +164,6 @@ class TestCogneeMemoryIngest:
 
         with patch("horse_fish.memory.cognee_store.cognee") as mock_cognee:
             mock_cognee.add = AsyncMock()
-            mock_cognee.cognify = AsyncMock()
             mock_cognee.config = MagicMock()
 
             await mem.ingest_run_result(run, results)
@@ -215,7 +189,7 @@ class TestCogneeMemoryIngest:
 
 
 class TestCogneeMemorySearch:
-    """Tests for searching Cognee knowledge graph."""
+    """Tests for searching Cognee vector store."""
 
     @pytest.mark.asyncio
     async def test_search_returns_memory_hits(self, tmp_path):
@@ -251,40 +225,3 @@ class TestCogneeMemorySearch:
 
             hits = await mem.search("nonexistent topic")
             assert hits == []
-
-
-class TestCogneeMemoryFallback:
-    """Tests for LLM fallback chain."""
-
-    @pytest.mark.asyncio
-    async def test_cognify_failure_triggers_fallback(self, tmp_path):
-        from horse_fish.memory.cognee_store import CogneeMemory
-
-        mem = CogneeMemory(
-            data_dir=tmp_path / "cognee",
-            llm_api_key="test-key",
-            llm_endpoint="https://api.inceptionlabs.ai/v1",
-            llm_model="openai/mercury-coder-small",
-            fallback_llm_api_key="dashscope-key",
-            fallback_llm_model="openai/qwen3.5-plus",
-            fallback_llm_endpoint="https://dashscope.aliyuncs.com/compatible-mode/v1",
-        )
-
-        call_count = 0
-
-        async def failing_cognify_then_succeed(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                raise RuntimeError("Mercury 2 failed")
-            return None
-
-        with patch("horse_fish.memory.cognee_store.cognee") as mock_cognee:
-            mock_cognee.add = AsyncMock()
-            mock_cognee.cognify = AsyncMock(side_effect=failing_cognify_then_succeed)
-            mock_cognee.config = MagicMock()
-
-            await mem.ingest("test content", {})
-
-            # Should have tried cognify twice (primary + fallback)
-            assert mock_cognee.cognify.await_count == 2

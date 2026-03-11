@@ -1,4 +1,4 @@
-"""Cognee-backed knowledge graph memory for orchestrator-level learning."""
+"""Cognee-backed vector search memory for orchestrator-level learning."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ except Exception:
 
 
 class CogneeHit(BaseModel):
-    """A search result from Cognee knowledge graph."""
+    """A search result from Cognee vector search."""
 
     node_id: str
     content: str
@@ -36,9 +36,10 @@ class CogneeHit(BaseModel):
 
 
 class CogneeMemory:
-    """Orchestrator-level memory using Cognee knowledge graph.
+    """Orchestrator-level memory using Cognee vector search.
 
-    Uses FastEmbed (CPU embeddings), LanceDB (vector store), and Kuzu (graph store).
+    Uses FastEmbed (CPU embeddings) and LanceDB (vector store).
+    No graph database (Kuzu removed to avoid lock contention).
     LLM fallback chain: Mercury 2 → Dashscope (qwen3.5-plus).
     """
 
@@ -70,7 +71,7 @@ class CogneeMemory:
         self._fallback_llm_model = fallback_llm_model or "openai/qwen3.5-plus"
         self._fallback_llm_endpoint = fallback_llm_endpoint or "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
-    def _configure(self, *, use_fallback: bool = False) -> None:
+    def _configure(self) -> None:
         """Configure Cognee providers. Lazy — called on first use."""
         self._data_dir.mkdir(parents=True, exist_ok=True)
 
@@ -88,92 +89,42 @@ class CogneeMemory:
         cognee.config.set_vector_db_provider("lancedb")
         cognee.config.set_vector_db_url(str(self._data_dir / "lancedb"))
 
-        # Graph store: Kuzu (file-based)
-        cognee.config.set_graph_database_provider("kuzu")
-        cognee.config.system_root_directory(str(self._data_dir))
-
-        # LLM — use set_llm_config dict for full control including endpoint
-        if use_fallback:
+        # LLM — pick best available: primary if key exists, else fallback
+        api_key = self._llm_api_key or self._fallback_llm_api_key
+        model = self._llm_model if self._llm_api_key else self._fallback_llm_model
+        endpoint = self._llm_endpoint if self._llm_api_key else self._fallback_llm_endpoint
+        if api_key:
             cognee.config.set_llm_config(
                 {
                     "llm_provider": "custom",
-                    "llm_api_key": self._fallback_llm_api_key,
-                    "llm_model": self._fallback_llm_model,
-                    "llm_endpoint": self._fallback_llm_endpoint,
+                    "llm_api_key": api_key,
+                    "llm_model": model,
+                    "llm_endpoint": endpoint,
                 }
             )
-        else:
-            cognee.config.set_llm_config(
-                {
-                    "llm_provider": "custom",
-                    "llm_api_key": self._llm_api_key,
-                    "llm_model": self._llm_model,
-                    "llm_endpoint": self._llm_endpoint,
-                }
-            )
-
-        # Monkey-patch: fix cognee bug where custom provider endpoint is not
-        # passed to GenericAPIAdapter in get_llm_client()
-        self._patch_custom_endpoint()
 
         self._configured = True
 
-    @staticmethod
-    def _patch_custom_endpoint() -> None:
-        """Patch cognee's get_llm_client to pass endpoint for custom provider."""
-        try:
-            from cognee.infrastructure.llm.structured_output_framework.litellm_instructor.llm import (
-                get_llm_client as client_module,
-            )
-
-            _original = client_module.get_llm_client
-
-            def _patched(raise_api_key_error: bool = True):
-                client = _original(raise_api_key_error)
-                # If endpoint wasn't set on the adapter, inject it from config
-                if hasattr(client, "endpoint") and not client.endpoint:
-                    from cognee.infrastructure.llm import get_llm_config
-
-                    cfg = get_llm_config()
-                    if cfg.llm_endpoint:
-                        client.endpoint = cfg.llm_endpoint
-                return client
-
-            client_module.get_llm_client = _patched
-        except Exception:
-            pass
-
     def _ensure_configured(self) -> None:
         if not self._configured:
-            use_fallback = not self._llm_api_key and bool(self._fallback_llm_api_key)
-            self._configure(use_fallback=use_fallback)
+            self._configure()
 
     async def ingest(self, content: str, metadata: dict[str, Any] | None = None) -> None:
-        """Add content to Cognee and build knowledge graph.
+        """Add content to Cognee vector store.
 
-        Calls cognee.add() then cognee.cognify(). If cognify fails with
-        primary LLM, retries with fallback LLM.
-
-        Uses dataset_name from metadata (default: "general") and
-        temporal_cognify=True for time-aware graph construction.
+        Calls cognee.add() to store content for vector similarity search.
+        Uses dataset_name from metadata (default: "general").
         """
         self._ensure_configured()
 
         dataset = (metadata or {}).get("dataset", "general")
         await cognee.add(content, dataset_name=dataset)
 
-        try:
-            await cognee.cognify(datasets=[dataset], temporal_cognify=True)
-        except Exception as exc:
-            logger.warning("cognify failed with primary LLM: %s — trying fallback", exc)
-            self._configure(use_fallback=True)
-            await cognee.cognify(datasets=[dataset], temporal_cognify=True)
-
     @staticmethod
     def _parse_result(result: Any) -> CogneeHit:
         """Parse a single Cognee search result into a CogneeHit.
 
-        GRAPH_COMPLETION can return str, dict, or object — handle all formats.
+        CHUNKS search can return str, dict, or object — handle all formats.
         """
         if isinstance(result, str):
             return CogneeHit(node_id="", content=result, score=1.0, metadata={})
@@ -194,22 +145,22 @@ class CogneeMemory:
     async def _search_cognee(
         self, query: str, top_k: int = 5, timeout: float = 60.0, **extra_kwargs: Any
     ) -> list[CogneeHit]:
-        """Shared search implementation with GRAPH_COMPLETION."""
+        """Shared search implementation with CHUNKS (pure vector similarity)."""
         self._ensure_configured()
 
         kwargs: dict[str, Any] = {"query_text": query, **extra_kwargs}
         if SearchType:
-            kwargs["query_type"] = SearchType.GRAPH_COMPLETION
+            kwargs["query_type"] = SearchType.CHUNKS
 
         results = await asyncio.wait_for(cognee.search(**kwargs), timeout=timeout)
         return [self._parse_result(r) for r in results[:top_k]]
 
     async def search(self, query: str, top_k: int = 5) -> list[CogneeHit]:
-        """Search the Cognee knowledge graph using GRAPH_COMPLETION."""
+        """Search the Cognee vector store using CHUNKS similarity search."""
         return await self._search_cognee(query, top_k=top_k)
 
     async def ingest_run_result(self, run: Task, subtask_results: list[SubtaskResult]) -> None:
-        """Ingest a completed run into the knowledge graph using structured node_sets.
+        """Ingest a completed run into the vector store using structured node_sets.
 
         Ingests: (1) task summary to task_summaries node_set, (2) subtask outcomes
         to subtask_outcomes node_set, (3) code diffs to code_diffs node_set.
@@ -230,23 +181,15 @@ class CogneeMemory:
             if result.diff:
                 await cognee.add(result.diff, dataset_name="run_results", node_set=["code_diffs"])
 
-        # 4. Cognify all at once
-        try:
-            await cognee.cognify(datasets=["run_results"], temporal_cognify=True)
-        except Exception as exc:
-            logger.warning("cognify failed with primary LLM: %s — trying fallback", exc)
-            self._configure(use_fallback=True)
-            await cognee.cognify(datasets=["run_results"], temporal_cognify=True)
-
     async def find_similar_tasks(self, task_description: str, top_k: int = 3) -> list[CogneeHit]:
-        """Find past tasks similar to a new one via knowledge graph search.
+        """Find past tasks similar to a new one via vector similarity search.
 
         Searches only the "run_results" dataset for relevant past work.
         """
         return await self._search_cognee(task_description, top_k=top_k, datasets=["run_results"])
 
     async def batch_ingest(self, entries: list) -> int:
-        """Batch ingest memory entries into Cognee knowledge graph.
+        """Batch ingest memory entries into Cognee vector store.
 
         Args:
             entries: List of MemoryEntry objects (from horse_fish.memory.store).
@@ -275,14 +218,6 @@ class CogneeMemory:
                 # Add all entries for this domain
                 for entry in domain_entries:
                     await cognee.add(entry.content, dataset_name=domain, node_set=[domain])
-
-                # Cognify once per domain
-                try:
-                    await cognee.cognify(datasets=[domain], temporal_cognify=True)
-                except Exception as exc:
-                    logger.warning("cognify failed with primary LLM for domain %s: %s — trying fallback", domain, exc)
-                    self._configure(use_fallback=True)
-                    await cognee.cognify(datasets=[domain], temporal_cognify=True)
 
                 ingested_count += len(domain_entries)
 
