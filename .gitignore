@@ -11,3 +11,5 @@ build/
 recordings/
 
 ref-projects/
+.worktrees/
+.overstory/
