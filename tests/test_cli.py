@@ -36,22 +36,32 @@ def test_version(runner):
 
 @patch("horse_fish.cli._init_components")
 def test_run_command(mock_init_components, runner, mock_run):
-    """Test 'hf run' invokes orchestrator and prints result."""
+    """Test 'hf run --foreground' uses PlanExecutor and prints plan result."""
+    from horse_fish.models import Plan, PlanState
+
     mock_orchestrator = MagicMock()
     mock_orchestrator.run = AsyncMock(return_value=mock_run)
+    mock_orchestrator._planner = MagicMock()
     mock_store = MagicMock()
     mock_store.close = MagicMock()
     mock_pool = MagicMock()
     mock_init_components.return_value = (mock_orchestrator, mock_store, mock_pool)
 
-    result = runner.invoke(main, ["run", "test task", "--foreground"])
+    plan = Plan.create("test task")
+    plan.state = PlanState.completed
+    plan.tasks = [mock_run]
 
-    assert result.exit_code == 0
-    assert f"Run {mock_run.id}: completed" in result.output
-    assert "[done] Subtask 1" in result.output
-    assert "[done] Subtask 2" in result.output
-    mock_orchestrator.run.assert_called_once_with("test task")
-    mock_store.close.assert_called_once()
+    with patch("horse_fish.orchestrator.plan_executor.PlanExecutor") as mock_executor_class:
+        mock_executor = MagicMock()
+        mock_executor.execute = AsyncMock(return_value=plan)
+        mock_executor_class.return_value = mock_executor
+
+        result = runner.invoke(main, ["run", "test task", "--foreground"])
+
+        assert result.exit_code == 0
+        assert f"Plan {plan.id[:8]}: completed" in result.output
+        assert "[completed] test task" in result.output
+        mock_store.close.assert_called_once()
 
 
 @patch("horse_fish.cli.Store")
@@ -119,21 +129,31 @@ def test_clean_command(mock_cwd, mock_store_class, _mock_worktrees, _mock_tmux, 
 @patch("horse_fish.cli._init_components")
 def test_run_with_options(mock_init_components, runner, mock_run):
     """Test 'hf run' with custom options."""
+    from horse_fish.models import Plan, PlanState
+
     mock_orchestrator = MagicMock()
     mock_orchestrator.run = AsyncMock(return_value=mock_run)
+    mock_orchestrator._planner = MagicMock()
     mock_store = MagicMock()
     mock_store.close = MagicMock()
     mock_pool = MagicMock()
     mock_init_components.return_value = (mock_orchestrator, mock_store, mock_pool)
 
-    result = runner.invoke(
-        main,
-        ["run", "custom task", "--runtime", "pi", "--model", "custom-model", "--max-agents", "5", "--foreground"],
-    )
+    plan = Plan.create("custom task")
+    plan.state = PlanState.completed
 
-    assert result.exit_code == 0
-    mock_init_components.assert_called_once_with("pi", "custom-model", 5, None)
-    mock_orchestrator.run.assert_called_once_with("custom task")
+    with patch("horse_fish.orchestrator.plan_executor.PlanExecutor") as mock_executor_class:
+        mock_executor = MagicMock()
+        mock_executor.execute = AsyncMock(return_value=plan)
+        mock_executor_class.return_value = mock_executor
+
+        result = runner.invoke(
+            main,
+            ["run", "custom task", "--runtime", "pi", "--model", "custom-model", "--max-agents", "5", "--foreground"],
+        )
+
+        assert result.exit_code == 0
+        mock_init_components.assert_called_once_with("pi", "custom-model", 5, None)
 
 
 @patch("horse_fish.cli.Orchestrator")
@@ -545,20 +565,31 @@ class TestRunForeground:
 
     @patch("horse_fish.cli._init_components")
     def test_run_foreground_flag(self, mock_init_components, runner, mock_run):
-        """--foreground triggers blocking orchestrator run."""
+        """--foreground triggers PlanExecutor-based run."""
+        from horse_fish.models import Plan, PlanState
+
         mock_orchestrator = MagicMock()
         mock_orchestrator.run = AsyncMock(return_value=mock_run)
+        mock_orchestrator._planner = MagicMock()
         mock_store = MagicMock()
         mock_store.close = MagicMock()
         mock_pool = MagicMock()
         mock_init_components.return_value = (mock_orchestrator, mock_store, mock_pool)
 
-        result = runner.invoke(main, ["run", "test task", "--foreground"])
+        plan = Plan.create("test task")
+        plan.state = PlanState.completed
+        plan.tasks = [mock_run]
 
-        assert result.exit_code == 0
-        assert f"Run {mock_run.id}: completed" in result.output
-        mock_init_components.assert_called_once()
-        mock_orchestrator.run.assert_called_once_with("test task")
+        with patch("horse_fish.orchestrator.plan_executor.PlanExecutor") as mock_executor_class:
+            mock_executor = MagicMock()
+            mock_executor.execute = AsyncMock(return_value=plan)
+            mock_executor_class.return_value = mock_executor
+
+            result = runner.invoke(main, ["run", "test task", "--foreground"])
+
+            assert result.exit_code == 0
+            assert f"Plan {plan.id[:8]}: completed" in result.output
+            mock_init_components.assert_called_once()
 
     @patch("horse_fish.orchestrator.run_manager.RunManager")
     def test_run_default_queues(self, mock_run_manager_class, runner):
@@ -707,3 +738,97 @@ class TestDashWithRunManager:
             max_agents=10,
         )
         mock_app.run.assert_called_once()
+
+
+class TestPlanCommand:
+    """Tests for hf plan command."""
+
+    def test_plan_list_empty(self, runner, tmp_path, monkeypatch):
+        """hf plan with no plans shows 'No plans found.'"""
+        db_path = str(tmp_path / "test.db")
+        monkeypatch.setattr("horse_fish.cli.DB_PATH", db_path)
+        result = runner.invoke(main, ["plan"])
+        assert result.exit_code == 0
+        assert "No plans found." in result.output
+
+    def test_plan_list_shows_plans(self, runner, tmp_path, monkeypatch):
+        """hf plan lists plans that exist in the store."""
+        from horse_fish.store.db import Store
+
+        db_path = str(tmp_path / "test.db")
+        monkeypatch.setattr("horse_fish.cli.DB_PATH", db_path)
+
+        store = Store(db_path)
+        store.migrate()
+        store.upsert_plan(
+            plan_id="plan-1234-abcd",
+            goal="Build feature X",
+            state="executing",
+            goal_conditions=["Tests pass"],
+            round=1,
+            created_at="2026-01-01T00:00:00",
+        )
+        store.close()
+
+        result = runner.invoke(main, ["plan"])
+        assert result.exit_code == 0
+        assert "plan-123" in result.output
+        assert "executing" in result.output
+        assert "Build feature X" in result.output
+
+    def test_plan_detail_not_found(self, runner, tmp_path, monkeypatch):
+        """hf plan <id> for nonexistent plan shows not found."""
+        db_path = str(tmp_path / "test.db")
+        monkeypatch.setattr("horse_fish.cli.DB_PATH", db_path)
+        result = runner.invoke(main, ["plan", "nonexistent"])
+        assert result.exit_code == 0
+        assert "not found" in result.output
+
+    def test_plan_detail_found(self, runner, tmp_path, monkeypatch):
+        """hf plan <id> shows plan details."""
+        from horse_fish.store.db import Store
+
+        db_path = str(tmp_path / "test.db")
+        monkeypatch.setattr("horse_fish.cli.DB_PATH", db_path)
+
+        store = Store(db_path)
+        store.migrate()
+        store.upsert_plan(
+            plan_id="plan-5678-efgh",
+            goal="Fix the bug",
+            state="completed",
+            goal_conditions=["Bug is fixed"],
+            round=0,
+            created_at="2026-01-01T00:00:00",
+        )
+        store.close()
+
+        result = runner.invoke(main, ["plan", "plan-5678-efgh"])
+        assert result.exit_code == 0
+        assert "Fix the bug" in result.output
+        assert "completed" in result.output
+
+    def test_plan_detail_json(self, runner, tmp_path, monkeypatch):
+        """hf plan <id> --json-output returns JSON."""
+        from horse_fish.store.db import Store
+
+        db_path = str(tmp_path / "test.db")
+        monkeypatch.setattr("horse_fish.cli.DB_PATH", db_path)
+
+        store = Store(db_path)
+        store.migrate()
+        store.upsert_plan(
+            plan_id="plan-json-test",
+            goal="JSON test",
+            state="planning",
+            round=0,
+            created_at="2026-01-01T00:00:00",
+        )
+        store.close()
+
+        result = runner.invoke(main, ["plan", "plan-json-test", "--json-output"])
+        assert result.exit_code == 0
+        import json
+
+        data = json.loads(result.output)
+        assert data["plan"]["goal"] == "JSON test"

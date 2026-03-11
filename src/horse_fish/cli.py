@@ -97,13 +97,22 @@ def main():
 def run(task: str, runtime: str, model: str | None, max_agents: int, planner_runtime: str | None, foreground: bool):
     """Submit a task to the swarm."""
     if foreground:
-        # Blocking behavior — run orchestrator synchronously
+        # Blocking behavior — run orchestrator via PlanExecutor
+        from horse_fish.orchestrator.plan_executor import PlanExecutor
+        from horse_fish.planner.goal import GoalPlanner
+
         orchestrator, store, _pool = _init_components(runtime, model, max_agents, planner_runtime)
+        goal_planner = GoalPlanner(orchestrator._planner)
+
+        async def run_task_fn(task_desc: str):
+            return await orchestrator.run(task_desc)
+
+        executor = PlanExecutor(store=store, goal_planner=goal_planner, run_task_fn=run_task_fn)
         try:
-            result = asyncio.run(orchestrator.run(task))
-            click.echo(f"Run {result.id}: {result.state}")
-            for subtask in result.subtasks:
-                click.echo(f"  [{subtask.state}] {subtask.description}")
+            plan = asyncio.run(executor.execute(task))
+            click.echo(f"Plan {plan.id[:8]}: {plan.state} (round {plan.round})")
+            for t in plan.tasks:
+                click.echo(f"  [{t.state}] {t.task}")
         finally:
             store.close()
     else:
@@ -115,6 +124,48 @@ def run(task: str, runtime: str, model: str | None, max_agents: int, planner_run
         )
         run_id = asyncio.run(manager.submit(task))
         click.echo(f"Queued run {run_id[:8]}. Use 'hf dash' to monitor or 'hf run --foreground' for blocking mode.")
+
+
+@main.command("plan")
+@click.argument("plan_id", required=False)
+@click.option("--json-output", "as_json", is_flag=True, help="Output as JSON")
+def plan_cmd(plan_id: str | None, as_json: bool):
+    """Show plan details or list recent plans."""
+    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+    store = Store(DB_PATH)
+    store.migrate()
+    try:
+        if plan_id:
+            p = store.fetch_plan(plan_id)
+            if not p:
+                click.echo(f"Plan '{plan_id}' not found.")
+                return
+            tasks = store.fetch_plan_tasks(p["id"])
+            if as_json:
+                click.echo(json.dumps({"plan": dict(p), "tasks": [dict(t) for t in tasks]}, indent=2, default=str))
+                return
+            click.echo(f"Plan: {p['id']}")
+            click.echo(f"Goal: {p['goal']}")
+            click.echo(f"State: {p['state']}  Round: {p['round']}/{p.get('max_rounds', 10)}")
+            if tasks:
+                click.echo(f"\nTasks ({len(tasks)}):")
+                for t in tasks:
+                    tid = t["id"][:8]
+                    desc = (t["task"] or "")[:50]
+                    click.echo(f"  {tid}  [{t['state']}]  {desc}")
+        else:
+            plans = store.fetch_recent_plans(limit=10)
+            if not plans:
+                click.echo("No plans found.")
+                return
+            click.echo(f"{'ID':<10} {'State':<12} {'Round':<7} {'Goal'}")
+            click.echo("-" * 70)
+            for p in plans:
+                pid = p["id"][:8]
+                goal = (p["goal"] or "")[:40]
+                click.echo(f"{pid:<10} {p['state']:<12} {p['round']:<7} {goal}")
+    finally:
+        store.close()
 
 
 @main.command()
